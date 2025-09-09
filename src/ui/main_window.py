@@ -31,6 +31,52 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Studio Media Player")
         self.setMinimumSize(1200, 800)
         
+        # Apply global dark theme
+        self.setStyleSheet("""
+            QMainWindow {
+                background-color: #2d2d2d;
+                color: #f0f0f0;
+            }
+            QWidget {
+                background-color: #2d2d2d;
+                color: #f0f0f0;
+                font-family: 'Segoe UI', Arial, sans-serif;
+            }
+            QMenuBar {
+                background-color: #383838;
+                color: #f0f0f0;
+                border-bottom: 1px solid #606060;
+                padding: 2px;
+            }
+            QMenuBar::item {
+                background-color: transparent;
+                padding: 6px 12px;
+                border-radius: 4px;
+            }
+            QMenuBar::item:selected {
+                background-color: #505050;
+            }
+            QMenu {
+                background-color: #383838;
+                color: #f0f0f0;
+                border: 1px solid #606060;
+                padding: 4px;
+            }
+            QMenu::item {
+                padding: 6px 24px;
+                border-radius: 4px;
+            }
+            QMenu::item:selected {
+                background-color: #505050;
+            }
+            QSplitter::handle {
+                background-color: #606060;
+            }
+            QSplitter::handle:vertical {
+                height: 2px;
+            }
+        """)
+        
         # Create central widget
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -42,19 +88,50 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Vertical)
         main_layout.addWidget(splitter)
         
+        # Media display area with frame counter overlay
+        media_container = QWidget()
+        media_container_layout = QVBoxLayout(media_container)
+        media_container_layout.setContentsMargins(0, 0, 0, 0)
+        media_container_layout.setSpacing(0)
+        
+        # Frame counter overlay
+        self.frame_counter_overlay = QLabel("")
+        self.frame_counter_overlay.setAlignment(Qt.AlignTop | Qt.AlignRight)
+        self.frame_counter_overlay.setStyleSheet("""
+            QLabel {
+                background-color: rgba(0, 0, 0, 180);
+                color: #ffffff;
+                border: none;
+                padding: 8px 12px;
+                font-family: 'Segoe UI', Arial, sans-serif;
+                font-size: 14px;
+                font-weight: bold;
+                border-radius: 6px;
+                margin: 10px;
+            }
+        """)
+        self.frame_counter_overlay.hide()  # Initially hidden
+        
         # Media display area
         self.media_display = QLabel("Load media file to start...")
         self.media_display.setAlignment(Qt.AlignCenter)
         self.media_display.setStyleSheet("""
             QLabel {
                 background-color: #2b2b2b;
-                color: #ffffff;
-                border: 2px dashed #555555;
-                font-size: 16px;
+                color: #e0e0e0;
+                border: 2px dashed #606060;
+                font-family: 'Segoe UI', Arial, sans-serif;
+                font-size: 18px;
+                font-weight: 500;
                 min-height: 400px;
             }
         """)
-        splitter.addWidget(self.media_display)
+        
+        # Stack the overlay on top of media display
+        media_container_layout.addWidget(self.media_display)
+        self.frame_counter_overlay.setParent(self.media_display)
+        
+        splitter.addWidget(media_container)
         
         # Bottom panel for controls
         bottom_panel = QWidget()
@@ -79,8 +156,21 @@ class MainWindow(QMainWindow):
         
         # Setup status bar
         self.status_bar = QStatusBar()
+        self.status_bar.setStyleSheet("""
+            QStatusBar {
+                background-color: #383838;
+                color: #f0f0f0;
+                border-top: 1px solid #606060;
+                font-family: 'Segoe UI', Arial, sans-serif;
+                font-size: 12px;
+                padding: 4px;
+            }
+            QStatusBar::item {
+                border: none;
+            }
+        """)
         self.setStatusBar(self.status_bar)
-        self.status_bar.showMessage("Ready")
+        self.status_bar.showMessage("Ready - Load a media file to start")
         
     def setupMenuBar(self):
         """Setup the menu bar."""
@@ -138,6 +228,7 @@ class MainWindow(QMainWindow):
         self.media_player.frameReady.connect(self.updateDisplay)
         self.media_player.positionChanged.connect(self.updateTimeline)
         self.media_player.durationChanged.connect(self.setDuration)
+        self.media_player.frameIndexChanged.connect(self.updateFrameCounter)
         
     def openFile(self):
         """Open media file dialog."""
@@ -168,7 +259,9 @@ class MainWindow(QMainWindow):
                 self.setWindowTitle(f"Studio Media Player - {filename}")
                 
                 # Update status
-                self.status_bar.showMessage(f"Loaded: {filename}")
+                file_size = os.path.getsize(file_path)
+                file_size_mb = file_size / (1024 * 1024)
+                self.status_bar.showMessage(f"Loaded: {filename} ({file_size_mb:.1f} MB) - Ready for playback")
                 
                 # Enable controls
                 self.media_controls.setEnabled(True)
@@ -217,6 +310,28 @@ class MainWindow(QMainWindow):
                 Qt.SmoothTransformation
             )
             self.media_display.setPixmap(scaled_pixmap)
+            # Show frame counter overlay when media is loaded
+            self.frame_counter_overlay.show()
+            
+    def updateFrameCounter(self, current_frame, total_frames, fps=0):
+        """Update frame counter overlay."""
+        if total_frames > 1:
+            # For videos and image sequences
+            counter_text = f"Frame: {current_frame + 1} / {total_frames}"
+            if fps > 0:
+                counter_text += f"\nFPS: {fps:.1f}"
+        else:
+            # For single images
+            counter_text = "Single Image"
+            
+        self.frame_counter_overlay.setText(counter_text)
+        
+        # Position the overlay in the top-right corner
+        parent_rect = self.media_display.rect()
+        overlay_size = self.frame_counter_overlay.sizeHint()
+        x = parent_rect.width() - overlay_size.width() - 10
+        y = 10
+        self.frame_counter_overlay.move(x, y)
             
     def updateTimeline(self, position):
         """Update timeline position."""
@@ -262,3 +377,10 @@ class MainWindow(QMainWindow):
         # Update display if there's a current frame
         if hasattr(self.media_player, 'current_frame') and self.media_player.current_frame:
             self.updateDisplay(self.media_player.current_frame)
+        # Reposition frame counter overlay
+        if self.frame_counter_overlay.isVisible():
+            parent_rect = self.media_display.rect()
+            overlay_size = self.frame_counter_overlay.sizeHint()
+            x = parent_rect.width() - overlay_size.width() - 10
+            y = 10
+            self.frame_counter_overlay.move(x, y)

@@ -23,6 +23,7 @@ class MediaPlayer(QObject):
     positionChanged = pyqtSignal(float)  # Position as percentage
     durationChanged = pyqtSignal(float)  # Duration in seconds
     playbackStateChanged = pyqtSignal(bool)  # True if playing
+    frameIndexChanged = pyqtSignal(int, int, float)  # current_frame, total_frames, fps
     errorOccurred = pyqtSignal(str)
     
     def __init__(self):
@@ -100,6 +101,7 @@ class MediaPlayer(QObject):
             
             # Emit signals
             self.frameReady.emit(qt_image)
+            self.frameIndexChanged.emit(self.current_frame_index, self.total_frames, self.fps)
             self.durationChanged.emit(0.0)
             self.positionChanged.emit(0.0)
             
@@ -174,6 +176,7 @@ class MediaPlayer(QObject):
         
         self.current_frame = qt_image
         self.frameReady.emit(qt_image)
+        self.frameIndexChanged.emit(self.current_frame_index, self.total_frames, self.fps)
         
     def play(self):
         """Start playback."""
@@ -250,6 +253,7 @@ class MediaPlayer(QObject):
                 
                 # Emit signals
                 self.frameReady.emit(qt_image)
+                self.frameIndexChanged.emit(self.current_frame_index, self.total_frames, self.fps)
                 position = frame_index / max(1, self.total_frames - 1)
                 self.positionChanged.emit(position)
                 break

@@ -99,40 +99,53 @@ class MediaControls(QWidget):
         # Apply styling
         self.setStyleSheet("""
             QPushButton {
-                background-color: #3c3c3c;
-                border: 1px solid #555555;
-                border-radius: 5px;
-                color: white;
-                font-size: 16px;
+                background-color: #404040;
+                border: 2px solid #606060;
+                border-radius: 6px;
+                color: #ffffff;
+                font-family: 'Segoe UI', Arial, sans-serif;
+                font-size: 18px;
                 font-weight: bold;
             }
             QPushButton:hover {
-                background-color: #4c4c4c;
+                background-color: #505050;
+                border-color: #707070;
             }
             QPushButton:pressed {
-                background-color: #2c2c2c;
+                background-color: #303030;
+                border-color: #505050;
             }
             QPushButton:disabled {
                 background-color: #2a2a2a;
-                color: #666666;
+                color: #808080;
+                border-color: #404040;
             }
             QLabel {
-                color: white;
-                font-family: monospace;
+                color: #f0f0f0;
+                font-family: 'Consolas', 'Courier New', monospace;
+                font-size: 13px;
+                font-weight: 500;
+                background-color: transparent;
             }
             QSlider::groove:horizontal {
-                border: 1px solid #999999;
-                height: 8px;
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #B1B1B1, stop:1 #c4c4c4);
+                border: 2px solid #606060;
+                height: 10px;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
+                    stop:0 #505050, stop:1 #404040);
                 margin: 2px 0;
-                border-radius: 3px;
+                border-radius: 6px;
             }
             QSlider::handle:horizontal {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #b4b4b4, stop:1 #8f8f8f);
-                border: 1px solid #5c5c5c;
-                width: 18px;
-                margin: -2px 0;
-                border-radius: 3px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
+                    stop:0 #d0d0d0, stop:1 #a0a0a0);
+                border: 2px solid #ffffff;
+                width: 20px;
+                margin: -4px 0;
+                border-radius: 10px;
+            }
+            QSlider::handle:horizontal:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
+                    stop:0 #e0e0e0, stop:1 #b0b0b0);
             }
         """)
         

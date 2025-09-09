@@ -81,36 +81,40 @@ class Timeline(QWidget):
         # Apply styling
         self.setStyleSheet("""
             QLabel {
-                color: white;
-                font-family: monospace;
-                font-size: 11px;
+                color: #f0f0f0;
+                font-family: 'Consolas', 'Courier New', monospace;
+                font-size: 12px;
+                font-weight: 500;
+                background-color: transparent;
+                padding: 2px 4px;
             }
             QSlider::groove:horizontal {
-                border: 1px solid #999999;
-                height: 10px;
+                border: 2px solid #606060;
+                height: 12px;
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
-                    stop:0 #3c3c3c, stop:1 #2c2c2c);
+                    stop:0 #404040, stop:1 #303030);
                 margin: 2px 0;
-                border-radius: 5px;
+                border-radius: 6px;
             }
             QSlider::handle:horizontal {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
-                    stop:0 #6c6c6c, stop:1 #4c4c4c);
-                border: 2px solid #ffffff;
-                width: 20px;
-                margin: -5px 0;
-                border-radius: 10px;
+                    stop:0 #808080, stop:1 #606060);
+                border: 3px solid #ffffff;
+                width: 24px;
+                margin: -7px 0;
+                border-radius: 12px;
             }
             QSlider::handle:horizontal:hover {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
-                    stop:0 #7c7c7c, stop:1 #5c5c5c);
+                    stop:0 #909090, stop:1 #707070);
+                border-color: #f0f0f0;
             }
             QSlider::sub-page:horizontal {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
                     stop:0 #0078d4, stop:1 #005a9e);
-                border: 1px solid #777;
-                height: 10px;
-                border-radius: 5px;
+                border: 2px solid #004578;
+                height: 12px;
+                border-radius: 6px;
             }
         """)
         
