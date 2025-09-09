@@ -87,6 +87,25 @@ Ketika memilih folder dengan image sequence:
 - Pastikan Python 3.7+ terinstall
 - Install ulang dependencies: `pip install -r requirements.txt`
 
+### Video tidak bisa diputar (MP4/MOV)
+1. **Test video compatibility:**
+   ```bash
+   python test_video.py
+   ```
+   
+2. **Install codec tambahan:**
+   ```bash
+   # Windows - install K-Lite Codec Pack
+   # atau install opencv dengan codec lengkap:
+   pip uninstall opencv-python
+   pip install opencv-python-headless
+   ```
+
+3. **Cek format video:**
+   - Pastikan codec didukung (H.264, MPEG-4)
+   - Coba convert video ke format standar
+   - Test dengan file video lain
+
 ### Image tidak muncul
 - Pastikan format file didukung
 - Cek apakah file tidak corrupt
@@ -94,6 +113,7 @@ Ketika memilih folder dengan image sequence:
 ### Playback tidak smooth
 - Kurangi FPS menggunakan speed control
 - Pastikan sistem memiliki RAM yang cukup
+- Close aplikasi lain yang menggunakan banyak memory
 
 ## Requirements
 

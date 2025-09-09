@@ -1,5 +1,5 @@
 from PyQt5.QtWidgets import QLabel, QVBoxLayout, QWidget
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtGui import QPixmap, QPainter, QPen, QFont
 import cv2
 import numpy as np
@@ -14,6 +14,12 @@ class MediaPlayer(QWidget):
         self.current_frame = None
         self.total_frames = 0
         self.current_frame_index = 0
+        self.video_capture = None
+        self.is_video = False
+        self.is_playing = False
+        self.video_timer = QTimer()
+        self.video_timer.timeout.connect(self.update_video_frame)
+        self.fps = 30  # Default FPS
         
     def setup_ui(self):
         layout = QVBoxLayout(self)
@@ -38,9 +44,49 @@ class MediaPlayer(QWidget):
     def load_media(self, file_path):
         """Load a media file (video or image)"""
         try:
-            # Try to load as image first
+            print(f"Attempting to load: {file_path}")
+            
+            # Clean up previous video capture
+            if self.video_capture:
+                self.video_capture.release()
+                self.video_capture = None
+                
+            # Try to load as video first
+            cap = cv2.VideoCapture(file_path)
+            if cap.isOpened():
+                # Check if it's a valid video by reading first frame
+                ret, frame = cap.read()
+                if ret:
+                    print(f"Video loaded successfully: {file_path}")
+                    self.video_capture = cap
+                    self.is_video = True
+                    self.current_frame = frame
+                    self.total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                    self.fps = cap.get(cv2.CAP_PROP_FPS) or 30
+                    self.current_frame_index = 0
+                    
+                    print(f"Video info: {self.total_frames} frames, {self.fps} FPS")
+                    
+                    # Reset to beginning
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    ret, frame = cap.read()
+                    if ret:
+                        self.current_frame = frame
+                        self.display_frame(frame)
+                        self.frameIndexChanged.emit(0, self.total_frames)
+                        self.frameReady.emit()
+                        return True
+                else:
+                    print(f"Could not read frame from video: {file_path}")
+                    cap.release()
+            else:
+                print(f"Could not open as video: {file_path}")
+            
+            # If video loading failed, try as image
             frame = cv2.imread(file_path)
             if frame is not None:
+                print(f"Image loaded successfully: {file_path}")
+                self.is_video = False
                 self.current_frame = frame
                 self.total_frames = 1
                 self.current_frame_index = 0
@@ -48,26 +94,13 @@ class MediaPlayer(QWidget):
                 self.frameIndexChanged.emit(0, 1)
                 self.frameReady.emit()
                 return True
-            
-            # Try to load as video
-            cap = cv2.VideoCapture(file_path)
-            if cap.isOpened():
-                ret, frame = cap.read()
-                if ret:
-                    self.current_frame = frame
-                    self.total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-                    self.current_frame_index = 0
-                    self.display_frame(frame)
-                    self.frameIndexChanged.emit(0, self.total_frames)
-                    self.frameReady.emit()
-                cap.release()
-                return True
                 
         except Exception as e:
             print(f"Error loading media: {e}")
             self.video_label.setText(f"Error loading file: {file_path}")
             return False
             
+        print(f"Unsupported file format: {file_path}")
         self.video_label.setText("Unsupported file format")
         return False
         
@@ -120,25 +153,109 @@ class MediaPlayer(QWidget):
             
     def toggle_play(self):
         """Toggle play/pause state"""
-        # This will be handled by the main window for image sequences
-        pass
+        if not self.is_video or not self.video_capture:
+            return
+            
+        if self.is_playing:
+            self.video_timer.stop()
+            self.is_playing = False
+        else:
+            # Start video playback
+            interval = int(1000 / self.fps)  # Convert FPS to milliseconds
+            self.video_timer.start(interval)
+            self.is_playing = True
         
     def stop(self):
         """Stop playback"""
-        # This will be handled by the main window for image sequences
-        pass
+        if self.video_timer.isActive():
+            self.video_timer.stop()
+        self.is_playing = False
+        
+        if self.is_video and self.video_capture:
+            # Go back to first frame
+            self.video_capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            ret, frame = self.video_capture.read()
+            if ret:
+                self.current_frame = frame
+                self.current_frame_index = 0
+                self.display_frame(frame)
+                self.frameIndexChanged.emit(0, self.total_frames)
         
     def previous_frame(self):
         """Go to previous frame"""
-        # This will be handled by the main window for image sequences
-        pass
+        if not self.is_video or not self.video_capture:
+            return
+            
+        if self.current_frame_index > 0:
+            new_index = self.current_frame_index - 1
+            self.video_capture.set(cv2.CAP_PROP_POS_FRAMES, new_index)
+            ret, frame = self.video_capture.read()
+            if ret:
+                self.current_frame = frame
+                self.current_frame_index = new_index
+                self.display_frame(frame)
+                self.frameIndexChanged.emit(new_index, self.total_frames)
         
     def next_frame(self):
         """Go to next frame"""
-        # This will be handled by the main window for image sequences
-        pass
+        if not self.is_video or not self.video_capture:
+            return
+            
+        if self.current_frame_index < self.total_frames - 1:
+            new_index = self.current_frame_index + 1
+            self.video_capture.set(cv2.CAP_PROP_POS_FRAMES, new_index)
+            ret, frame = self.video_capture.read()
+            if ret:
+                self.current_frame = frame
+                self.current_frame_index = new_index
+                self.display_frame(frame)
+                self.frameIndexChanged.emit(new_index, self.total_frames)
         
     def seek_to_position(self, position):
         """Seek to a specific position"""
-        # This will be handled by the main window for image sequences
-        pass
+        if not self.is_video or not self.video_capture:
+            return
+            
+        frame_index = int(position)
+        if 0 <= frame_index < self.total_frames:
+            self.video_capture.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+            ret, frame = self.video_capture.read()
+            if ret:
+                self.current_frame = frame
+                self.current_frame_index = frame_index
+                self.display_frame(frame)
+                self.frameIndexChanged.emit(frame_index, self.total_frames)
+                
+    def update_video_frame(self):
+        """Update video frame during playback"""
+        if not self.is_video or not self.video_capture:
+            return
+            
+        ret, frame = self.video_capture.read()
+        if ret:
+            self.current_frame = frame
+            self.current_frame_index += 1
+            self.display_frame(frame)
+            self.frameIndexChanged.emit(self.current_frame_index, self.total_frames)
+        else:
+            # End of video
+            self.video_timer.stop()
+            self.is_playing = False
+            
+    def closeEvent(self, event):
+        """Clean up when widget is closed"""
+        if self.video_capture:
+            self.video_capture.release()
+        super().closeEvent(event)
+        
+    def get_video_info(self):
+        """Get video information"""
+        if self.is_video and self.video_capture:
+            return {
+                'is_video': True,
+                'total_frames': self.total_frames,
+                'fps': self.fps,
+                'current_frame': self.current_frame_index,
+                'is_playing': self.is_playing
+            }
+        return {'is_video': False}

@@ -139,21 +139,21 @@ class TimelineWidget(QWidget):
             
     def update_position_label(self):
         """Update the position display"""
-        if self.duration > 0:
-            # For image sequences, show frame numbers
+        if self.duration > 1:
+            # For video files or image sequences, show frame numbers
             self.position_label.setText(f"Frame {self.current_position + 1}")
         else:
-            # For video files, show time
-            self.position_label.setText(self.format_time(self.current_position))
+            # For single images
+            self.position_label.setText("Frame 1")
             
     def update_duration_label(self):
         """Update the duration display"""
-        if self.duration > 0:
-            # For image sequences, show total frame count
+        if self.duration > 1:
+            # For video files or image sequences, show total frame count
             self.duration_label.setText(f"Total {self.duration}")
         else:
-            # For video files, show time
-            self.duration_label.setText(self.format_time(self.duration))
+            # For single images
+            self.duration_label.setText("Total 1")
             
     def format_time(self, seconds):
         """Format seconds into MM:SS format"""

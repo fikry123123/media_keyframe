@@ -149,8 +149,15 @@ class MainWindow(QMainWindow):
         if file_path:
             self.image_sequence_files = []
             self.current_sequence_index = 0
-            self.media_player.load_media(file_path)
-            self.status_bar.showMessage(f"Loaded: {os.path.basename(file_path)}")
+            success = self.media_player.load_media(file_path)
+            if success:
+                # Setup timeline for video
+                if hasattr(self.media_player, 'is_video') and self.media_player.is_video:
+                    self.timeline.set_duration(self.media_player.total_frames)
+                    self.timeline.set_position(0)
+                self.status_bar.showMessage(f"Loaded: {os.path.basename(file_path)}")
+            else:
+                self.status_bar.showMessage(f"Failed to load: {os.path.basename(file_path)}")
             
     def open_image_sequence(self):
         folder_path = QFileDialog.getExistingDirectory(
@@ -219,7 +226,14 @@ class MainWindow(QMainWindow):
                 self.controls.set_play_state(True)
                 self.status_bar.showMessage(f"Playing image sequence at {fps} FPS")
         else:
+            # For video files, use media player
             self.media_player.toggle_play()
+            if hasattr(self.media_player, 'is_playing'):
+                self.controls.set_play_state(self.media_player.is_playing)
+                if self.media_player.is_playing:
+                    self.status_bar.showMessage("Playing video")
+                else:
+                    self.status_bar.showMessage("Paused")
             
     def next_sequence_frame(self):
         """Move to next frame in sequence during playback"""
@@ -241,6 +255,8 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage("Stopped - Back to first frame")
         else:
             self.media_player.stop()
+            self.controls.set_play_state(False)
+            self.status_bar.showMessage("Stopped")
             
     def previous_frame(self):
         if self.image_sequence_files:
