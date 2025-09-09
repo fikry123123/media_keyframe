@@ -8,6 +8,22 @@
 			"isBackground": false,
 			"problemMatcher": [],
 			"group": "build"
+		},
+		{
+			"label": "Test Video Compatibility",
+			"type": "shell",
+			"command": "python test_video.py",
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "test"
+		},
+		{
+			"label": "Install Dependencies",
+			"type": "shell",
+			"command": "pip install -r requirements.txt",
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
 		}
 	]
 }

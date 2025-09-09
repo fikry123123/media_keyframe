@@ -5,6 +5,9 @@ Media player yang dioptimalkan untuk melihat image sequence dan file video denga
 ## Fitur Utama
 
 - **Image Sequence Viewer**: Pilih folder berisi banyak foto dan putar sebagai sequence
+- **Drag & Drop Support**: Drag file video/gambar langsung ke aplikasi
+- **Playlist Management**: Panel playlist untuk mengelola multiple file
+- **Compare Mode**: Bandingkan 2 video/gambar secara berdampingan
 - **Frame Counter Persisten**: Tampilan frame counter yang selalu terlihat
 - **Legibilitas Optimal**: Kontras warna dan ukuran font yang telah dioptimalkan
 - **Kontrol Kecepatan**: Atur kecepatan playback untuk image sequence (1-30 FPS)
@@ -30,6 +33,18 @@ Media player yang dioptimalkan untuk melihat image sequence dan file video denga
 ### Membuka File
 - **File → Open File** (Ctrl+O): Buka single file (video/image)
 - **File → Open Image Sequence** (Ctrl+Shift+O): Pilih folder berisi image sequence
+- **Drag & Drop**: Drag file langsung ke aplikasi untuk menambah ke playlist
+
+### Playlist Management
+- **Add Files**: Tombol untuk menambah multiple file ke playlist
+- **Clear**: Bersihkan playlist
+- **Double-click**: Load file dari playlist
+- **File → Clear Playlist**: Clear semua item
+
+### Compare Mode
+- **View → Compare Mode** (Ctrl+T): Enable compare mode
+- **Checkbox**: Toggle compare mode di panel playlist
+- **Usage**: Pilih 2 item dari playlist untuk comparison side-by-side
 
 ### Kontrol Playback
 - **Play/Pause**: Tombol ▶/⏸ atau Space
@@ -45,6 +60,7 @@ Media player yang dioptimalkan untuk melihat image sequence dan file video denga
 - `End`: Go to last frame
 - `Page Up`: Jump backward 10 frames
 - `Page Down`: Jump forward 10 frames
+- `Ctrl+T`: Toggle compare mode
 
 ### Timeline Navigation
 - Klik dan drag timeline slider untuk navigasi cepat
@@ -77,9 +93,19 @@ Ketika memilih folder dengan image sequence:
 
 1. **Untuk Image Sequence**: Pastikan file dalam folder memiliki format penamaan yang konsisten (contoh: frame_001.jpg, frame_002.jpg, dst.)
 
-2. **Performance**: Untuk folder dengan ribuan gambar, loading mungkin membutuhkan waktu sejenak
+2. **Drag & Drop**: Drag multiple file sekaligus untuk menambah ke playlist dengan cepat
 
-3. **Navigation**: Gunakan keyboard shortcuts untuk navigasi yang lebih cepat
+3. **Playlist**: Gunakan playlist untuk mengelola multiple video dan switching cepat
+
+4. **Compare Mode**: 
+   - Enable compare mode terlebih dahulu
+   - Pilih exactly 2 item dari playlist (Ctrl+click)
+   - Double-click salah satu untuk load comparison
+   - Kontrol akan mempengaruhi kedua video bersamaan
+
+5. **Performance**: Untuk folder dengan ribuan gambar, loading mungkin membutuhkan waktu sejenak
+
+6. **Navigation**: Gunakan keyboard shortcuts untuk navigasi yang lebih cepat
 
 ## Troubleshooting
 
