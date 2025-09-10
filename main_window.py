@@ -211,6 +211,7 @@ class MainWindow(QMainWindow):
         
         # Playlist list
         self.playlist_widget = QListWidget()
+        self.playlist_widget.setSelectionMode(QListWidget.ExtendedSelection) # Allow multiple selections
         self.playlist_widget.setStyleSheet("""
             QListWidget {
                 background-color: #2b2b2b;
@@ -292,8 +293,28 @@ class MainWindow(QMainWindow):
         
         playlist_layout.addWidget(compare_group)
         
-        parent_splitter.addWidget(playlist_widget)
+        # Add compare button (MODIFIKASI)
+        compare_button = QPushButton("Compare Selected")
+        compare_button.setStyleSheet("""
+            QPushButton {
+                background-color: #5d5d5d;
+                border: 1px solid #777777;
+                padding: 5px;
+                border-radius: 4px;
+                color: #ffffff;
+            }
+            QPushButton:hover {
+                background-color: #6a6a6a;
+            }
+            QPushButton:pressed {
+                background-color: #4a4a4a;
+            }
+        """)
+        compare_button.clicked.connect(self.load_compare_files)
+        playlist_layout.addWidget(compare_button)
         
+        parent_splitter.addWidget(playlist_widget)
+                
     def create_media_panel(self, parent_splitter):
         """Create the media player panel"""
         media_widget = QWidget()
@@ -324,24 +345,34 @@ class MainWindow(QMainWindow):
         media_layout.addWidget(self.controls)
         
         parent_splitter.addWidget(media_widget)
-        
-    def connect_signals(self):
-        # Media controls
-        self.controls.play_button.clicked.connect(self.toggle_play)
-        self.controls.stop_button.clicked.connect(self.stop)
-        self.controls.prev_button.clicked.connect(self.previous_frame)
-        self.controls.next_button.clicked.connect(self.next_frame)
-        
-        # Timeline
-        self.timeline.position_changed.connect(self.seek_to_position)
-        
-        # Media player signals
-        if hasattr(self.media_player, 'frameIndexChanged'):
-            self.media_player.frameIndexChanged.connect(self.update_frame_counter)
             
-        # Connect second media player signals in compare mode
-        if hasattr(self.media_player_2, 'frameIndexChanged'):
-            self.media_player_2.frameIndexChanged.connect(self.update_frame_counter)
+    def connect_signals(self):
+            # Media controls
+            self.controls.play_button.clicked.connect(self.toggle_play)
+            self.controls.stop_button.clicked.connect(self.stop)
+            self.controls.prev_button.clicked.connect(self.previous_frame)
+            self.controls.next_button.clicked.connect(self.next_frame)
+
+            # Timeline
+            self.timeline.position_changed.connect(self.seek_to_position)
+
+            # Media player signals
+            if hasattr(self.media_player, 'frameIndexChanged'):
+                self.media_player.frameIndexChanged.connect(self.update_frame_counter) 
+                self.media_player.frameIndexChanged.connect(self.timeline.set_position)
+                
+            # Hubungkan sinyal playStateChanged dari MediaPlayer ke MediaControls
+            if hasattr(self.media_player, 'playStateChanged'):
+                self.media_player.playStateChanged.connect(self.controls.set_play_state)
+
+            # Connect second media player signals in compare mode
+            if hasattr(self.media_player_2, 'frameIndexChanged'):
+                self.media_player_2.frameIndexChanged.connect(self.update_frame_counter)
+            self.media_player_2.frameIndexChanged.connect(self.timeline.set_position)
+            
+            # Hubungkan sinyal playStateChanged dari player 2 juga
+            if hasattr(self.media_player_2, 'playStateChanged'):
+                self.media_player_2.playStateChanged.connect(self.controls.set_play_state)
             
     def open_file(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -444,6 +475,7 @@ class MainWindow(QMainWindow):
                         self.status_bar.showMessage("Playing video")
                     else:
                         self.status_bar.showMessage("Paused")
+                        
             
     def next_sequence_frame(self):
         """Move to next frame in sequence during playback"""
@@ -675,20 +707,36 @@ class MainWindow(QMainWindow):
             
     # Compare mode functionality
     def toggle_compare_mode(self, enabled=None):
-        """Toggle compare mode"""
-        if enabled is None:
-            enabled = self.compare_checkbox.isChecked()
-        else:
-            self.compare_checkbox.setChecked(enabled)
+            """Toggle compare mode"""
+            if enabled is None:
+                enabled = self.compare_checkbox.isChecked()
+            else:
+                self.compare_checkbox.setChecked(enabled)
+                
+            self.compare_mode = enabled
+            self.compare_action.setChecked(enabled)
             
-        self.compare_mode = enabled
-        self.compare_action.setChecked(enabled)
-        
-        if enabled:
-            # Show second media player
-            self.media_player_2.show()
-            self.status_bar.showMessage("Compare mode enabled - Select 2 items from playlist")
-        else:
-            # Hide second media player
-            self.media_player_2.hide()
-            self.status_bar.showMessage("Compare mode disabled")
+            if enabled:
+                # Show second media player
+                self.media_player_2.show()
+                self.status_bar.showMessage("Compare mode enabled - Select 2 items from playlist")
+
+                # --- TAMBAHKAN LOGIKA INI ---
+                # Jika ada 2 item di playlist, muat dan putar secara otomatis
+                if self.playlist_widget.count() >= 2:
+                    file1 = self.playlist_widget.item(0).data(Qt.UserRole)
+                    file2 = self.playlist_widget.item(1).data(Qt.UserRole)
+                    
+                    self.media_player.load_media(file1)
+                    self.media_player_2.load_media(file2)
+                    
+                    self.media_player.play()
+                    self.media_player_2.play()
+
+                # --- AKHIR LOGIKA TAMBAHAN ---
+                
+            else:
+                # Hide second media player and stop playback
+                self.media_player_2.hide()
+                self.media_player_2.stop()
+                self.status_bar.showMessage("Compare mode disabled")
