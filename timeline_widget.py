@@ -1,164 +1,144 @@
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QSlider, QLabel
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtWidgets import QWidget, QMenu, QAction
+from PyQt5.QtCore import Qt, QPoint, pyqtSignal
+from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont
 
 class TimelineWidget(QWidget):
     position_changed = pyqtSignal(int)
+    display_mode_changed = pyqtSignal(bool)
     
     def __init__(self):
         super().__init__()
+        self.setMouseTracking(True)
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self.show_context_menu)
+        
         self.duration = 0
         self.current_position = 0
-        self.setup_ui()
-        
-    def setup_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 5, 10, 5)
-        layout.setSpacing(5)
-        
-        # Timeline info layout
-        info_layout = QHBoxLayout()
-        
-        # Current position label
-        self.position_label = QLabel("00:00")
-        self.position_label.setStyleSheet("""
-            QLabel {
-                color: #ffffff;
-                font-size: 14px;
-                font-weight: bold;
-                font-family: 'Courier New', monospace;
-                background-color: #444444;
-                padding: 4px 8px;
-                border-radius: 3px;
-                min-width: 60px;
+        self.marks = []
+        self.fps = 0.0
+        self.show_timecode = False
+        self.setFixedHeight(30)
+        self.setStyleSheet("""
+            QWidget {
+                background-color: #3a3a3a;
+                border-top: 1px solid #555555;
             }
         """)
-        info_layout.addWidget(self.position_label)
-        
-        # Spacer
-        info_layout.addStretch()
-        
-        # Duration label
-        self.duration_label = QLabel("00:00")
-        self.duration_label.setStyleSheet("""
-            QLabel {
-                color: #ffffff;
-                font-size: 14px;
-                font-weight: bold;
-                font-family: 'Courier New', monospace;
-                background-color: #444444;
-                padding: 4px 8px;
-                border-radius: 3px;
-                min-width: 60px;
-            }
-        """)
-        info_layout.addWidget(self.duration_label)
-        
-        layout.addLayout(info_layout)
-        
-        # Timeline slider
-        self.timeline_slider = QSlider(Qt.Horizontal)
-        self.timeline_slider.setMinimum(0)
-        self.timeline_slider.setMaximum(100)
-        self.timeline_slider.setValue(0)
-        self.timeline_slider.setStyleSheet("""
-            QSlider {
-                height: 25px;
-            }
-            QSlider::groove:horizontal {
-                border: 3px solid #666666;
-                height: 12px;
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
-                    stop:0 #2b2b2b, stop:1 #444444);
-                border-radius: 6px;
-            }
-            QSlider::handle:horizontal {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #ffffff, stop:1 #cccccc);
-                border: 2px solid #666666;
-                width: 20px;
-                margin: -6px 0;
-                border-radius: 10px;
-            }
-            QSlider::handle:horizontal:hover {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #dddddd, stop:1 #aaaaaa);
-                border-color: #888888;
-            }
-            QSlider::handle:horizontal:pressed {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #aaaaaa, stop:1 #888888);
-            }
-            QSlider::sub-page:horizontal {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #0078d4, stop:1 #005a9e);
-                border-radius: 6px;
-            }
-        """)
-        layout.addWidget(self.timeline_slider)
-        
-        # Connect signals
-        self.timeline_slider.valueChanged.connect(self.on_position_changed)
-        self.timeline_slider.sliderPressed.connect(self.on_slider_pressed)
-        self.timeline_slider.sliderReleased.connect(self.on_slider_released)
-        
-        # Flags for handling slider interaction
-        self.slider_being_dragged = False
         
     def set_duration(self, duration):
-        """Set the total duration/frame count"""
         self.duration = duration
-        self.timeline_slider.setMaximum(max(0, duration - 1))
-        self.update_duration_label()
+        self.update()
         
     def set_position(self, position):
-        """Set current position without triggering signals"""
-        if not self.slider_being_dragged:
+        if self.current_position != position:
             self.current_position = position
-            self.timeline_slider.blockSignals(True)
-            self.timeline_slider.setValue(position)
-            self.timeline_slider.blockSignals(False)
-            self.update_position_label()
-            
-    def on_slider_pressed(self):
-        """Called when user starts dragging the slider"""
-        self.slider_being_dragged = True
+            self.update()
+
+    def set_marks(self, marks):
+        self.marks = marks
+        self.update()
+
+    def set_fps(self, fps):
+        self.fps = fps
+        self.update()
         
-    def on_slider_released(self):
-        """Called when user releases the slider"""
-        self.slider_being_dragged = False
-        self.position_changed.emit(self.timeline_slider.value())
+    def set_timecode_mode(self, enabled):
+        self.show_timecode = enabled
+        self.update()
+
+    def show_context_menu(self, pos):
+        context_menu = QMenu(self)
         
-    def on_position_changed(self, position):
-        """Called when slider value changes"""
-        self.current_position = position
-        self.update_position_label()
+        frame_action = QAction("Show Frame Number", self)
+        frame_action.setCheckable(True)
+        frame_action.setChecked(not self.show_timecode)
+        context_menu.addAction(frame_action)
+
+        timecode_action = QAction("Show Timecode (MM:SS.FF)", self)
+        timecode_action.setCheckable(True)
+        timecode_action.setChecked(self.show_timecode)
+        context_menu.addAction(timecode_action)
+
+        frame_action.triggered.connect(lambda: self.display_mode_changed.emit(False))
+        timecode_action.triggered.connect(lambda: self.display_mode_changed.emit(True))
+
+        context_menu.exec_(self.mapToGlobal(pos))
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
         
-        # Only emit signal if user is dragging (for real-time preview)
-        if self.slider_being_dragged:
-            self.position_changed.emit(position)
+        # Draw background
+        painter.setBrush(QBrush(QColor("#3a3a3a")))
+        painter.setPen(Qt.NoPen)
+        painter.drawRect(self.rect())
+        
+        # Cek apakah durasi lebih dari 0 untuk menghindari pembagian nol
+        if self.duration > 0:
+            # Hitung posisi horizontal untuk penanda (marker)
+            marker_x = (self.current_position / (self.duration - 1)) * self.width() if self.duration > 1 else 0
+
+            # --- Gambar penanda posisi sebagai garis ---
+            painter.setPen(QPen(QColor("#ffffff"), 2))
+            painter.drawLine(int(marker_x), 0, int(marker_x), self.height())
             
-    def update_position_label(self):
-        """Update the position display"""
-        if self.duration > 1:
-            # For video files or image sequences, show frame numbers
-            self.position_label.setText(f"Frame {self.current_position + 1}")
-        else:
-            # For single images
-            self.position_label.setText("Frame 1")
+            # --- Gambar teks di atas garis ---
+            font = QFont("Arial", 9)
+            painter.setFont(font)
+            painter.setPen(QColor("#ffffff"))
             
-    def update_duration_label(self):
-        """Update the duration display"""
-        if self.duration > 1:
-            # For video files or image sequences, show total frame count
-            self.duration_label.setText(f"Total {self.duration}")
-        else:
-            # For single images
-            self.duration_label.setText("Total 1")
+            # Tentukan teks yang akan ditampilkan berdasarkan mode
+            if self.show_timecode and self.fps > 0:
+                current_seconds = self.current_position / self.fps
+                minutes = int(current_seconds // 60)
+                seconds = int(current_seconds % 60)
+                frames = int((current_seconds - int(current_seconds)) * self.fps)
+                frame_text = f"{minutes:02d}:{seconds:02d}.{frames:02d}"
+            else:
+                frame_text = str(self.current_position)
+
+            text_rect = painter.fontMetrics().boundingRect(frame_text)
             
-    def format_time(self, seconds):
-        """Format seconds into MM:SS format"""
-        if seconds < 0:
-            return "00:00"
-        mins = int(seconds // 60)
-        secs = int(seconds % 60)
-        return f"{mins:02d}:{secs:02d}"
+            # Atur posisi teks di atas garis
+            text_x = int(marker_x) - text_rect.width() // 2
+            text_y = text_rect.height() + 2
+            
+            # Pastikan teks tidak keluar dari widget
+            if text_x < 0:
+                text_x = 0
+            if text_x + text_rect.width() > self.width():
+                text_x = self.width() - text_rect.width()
+
+            painter.drawText(text_x, text_y, frame_text)
+
+            # --- Gambar mark pada timeline sebagai garis vertikal tipis ---
+            painter.setPen(QPen(QColor("#ffffff"), 2))
+            
+            for mark_frame in self.marks:
+                if self.duration > 1:
+                    mark_x = (mark_frame / (self.duration - 1)) * self.width()
+                else:
+                    mark_x = 0
+                
+                # Gambar garis vertikal tipis sebagai mark
+                painter.drawLine(int(mark_x), 0, int(mark_x), self.height())
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.seek_to_mouse_position(event.pos())
+            
+    def mouseMoveEvent(self, event):
+        if event.buttons() & Qt.LeftButton:
+            self.seek_to_mouse_position(event.pos())
+
+    def seek_to_mouse_position(self, pos):
+        if self.duration > 0:
+            x = pos.x()
+            # Handle division by zero for single-frame duration
+            if self.duration > 1:
+                new_position = int((x / self.width()) * (self.duration - 1))
+            else:
+                new_position = 0
+            
+            new_position = max(0, min(new_position, self.duration - 1))
+            self.position_changed.emit(new_position)

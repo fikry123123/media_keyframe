@@ -1,14 +1,14 @@
 from PyQt5.QtWidgets import QLabel, QVBoxLayout, QWidget
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
-from PyQt5.QtGui import QPixmap, QPainter, QPen, QFont
+from PyQt5.QtGui import QPixmap, QPainter, QPen, QFont, QImage
 import cv2
 import numpy as np
 
 class MediaPlayer(QWidget):
     frameIndexChanged = pyqtSignal(int, int)  # current_frame, total_frames
     frameReady = pyqtSignal()
-    # Tambahkan sinyal baru untuk sinkronisasi
     playStateChanged = pyqtSignal(bool)
+    fpsChanged = pyqtSignal(float)
     
     def __init__(self):
         super().__init__()
@@ -32,8 +32,9 @@ class MediaPlayer(QWidget):
         self.video_label.setStyleSheet("""
             QLabel {
                 background-color: #1a1a1a;
-                border: 2px solid #444444;
-                border-radius: 8px;
+                /* Hapus border dan margin untuk menghilangkan celah */
+                border: none; 
+                margin: 0px;
                 color: #cccccc;
                 font-size: 18px;
                 font-weight: bold;
@@ -43,16 +44,13 @@ class MediaPlayer(QWidget):
         layout.addWidget(self.video_label)
         
     def load_media(self, file_path):
-        """Load a media file (video or image)"""
         try:
             print(f"Attempting to load: {file_path}")
             
-            # Clean up previous video capture
             if self.video_capture:
                 self.video_capture.release()
                 self.video_capture = None
                 
-            # Try to load as video first
             cap = cv2.VideoCapture(file_path)
             if cap.isOpened():
                 ret, frame = cap.read()
@@ -73,6 +71,7 @@ class MediaPlayer(QWidget):
                         self.current_frame = frame
                         self.display_frame(frame)
                         self.frameIndexChanged.emit(0, self.total_frames)
+                        self.fpsChanged.emit(self.fps) # Kirimkan nilai FPS
                         self.frameReady.emit()
                         return True
                 else:
@@ -81,7 +80,6 @@ class MediaPlayer(QWidget):
             else:
                 print(f"Could not open as video: {file_path}")
             
-            # If video loading failed, try as image
             frame = cv2.imread(file_path)
             if frame is not None:
                 print(f"Image loaded successfully: {file_path}")
@@ -91,31 +89,38 @@ class MediaPlayer(QWidget):
                 self.current_frame_index = 0
                 self.display_frame(frame)
                 self.frameIndexChanged.emit(0, 1)
+                self.fpsChanged.emit(0.0) # FPS 0 untuk gambar statis
                 self.frameReady.emit()
                 return True
                 
         except Exception as e:
             print(f"Error loading media: {e}")
             self.video_label.setText(f"Error loading file: {file_path}")
+            self.fpsChanged.emit(0.0)
             return False
             
         print(f"Unsupported file format: {file_path}")
         self.video_label.setText("Unsupported file format")
+        self.fpsChanged.emit(0.0)
         return False
         
     def display_frame(self, frame):
-        """Display a frame in the video label"""
         if frame is None:
             return
             
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         
+        # Ambil ukuran QLabel untuk penskalaan
         label_size = self.video_label.size()
+        
+        # Jika ukuran label belum diinisialisasi atau terlalu kecil, gunakan ukuran hint sebagai fallback
         if label_size.width() <= 0 or label_size.height() <= 0:
             label_size = self.video_label.sizeHint()
             
         frame_height, frame_width = rgb_frame.shape[:2]
-        label_width, label_height = label_size.width() - 20, label_size.height() - 20
+        
+        # Perhitungan lebar/tinggi tanpa padding atau border
+        label_width, label_height = label_size.width(), label_size.height()
         
         if label_width <= 0 or label_height <= 0:
             return
@@ -135,16 +140,15 @@ class MediaPlayer(QWidget):
         qt_image = QImage(resized_frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
         pixmap = QPixmap.fromImage(qt_image)
         
-        self.video_label.setPixmap(pixmap)
+        # Scaling the pixmap to fill the label completely
+        self.video_label.setPixmap(pixmap.scaled(label_size, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         
     def resizeEvent(self, event):
-        """Handle widget resize events"""
         super().resizeEvent(event)
         if self.current_frame is not None:
             self.display_frame(self.current_frame)
             
     def toggle_play(self):
-        """Toggle play/pause state"""
         if not self.is_video or not self.video_capture:
             return
             
@@ -156,13 +160,9 @@ class MediaPlayer(QWidget):
             self.video_timer.start(interval)
             self.is_playing = True
         
-        # Kirim sinyal perubahan status play
         self.playStateChanged.emit(self.is_playing)
             
     def play(self):
-        """
-        Memulai pemutaran media.
-        """
         if not self.is_playing:
             print("Pemutaran dimulai")
             interval = int(1000 / self.fps)
@@ -171,7 +171,6 @@ class MediaPlayer(QWidget):
             self.playStateChanged.emit(True)
         
     def stop(self):
-        """Stop playback"""
         if self.video_timer.isActive():
             self.video_timer.stop()
         self.is_playing = False
@@ -185,11 +184,9 @@ class MediaPlayer(QWidget):
                 self.display_frame(frame)
                 self.frameIndexChanged.emit(0, self.total_frames)
         
-        # Kirim sinyal status berhenti
         self.playStateChanged.emit(False)
         
     def previous_frame(self):
-        """Go to previous frame"""
         if not self.is_video or not self.video_capture:
             return
             
@@ -204,7 +201,6 @@ class MediaPlayer(QWidget):
                 self.frameIndexChanged.emit(new_index, self.total_frames)
         
     def next_frame(self):
-        """Go to next frame"""
         if not self.is_video or not self.video_capture:
             return
             
@@ -219,7 +215,6 @@ class MediaPlayer(QWidget):
                 self.frameIndexChanged.emit(new_index, self.total_frames)
         
     def seek_to_position(self, position):
-        """Seek to a specific position"""
         if not self.is_video or not self.video_capture:
             return
             
@@ -234,7 +229,6 @@ class MediaPlayer(QWidget):
                 self.frameIndexChanged.emit(frame_index, self.total_frames)
                 
     def update_video_frame(self):
-        """Update video frame during playback"""
         if not self.is_video or not self.video_capture:
             return
             
@@ -250,13 +244,11 @@ class MediaPlayer(QWidget):
             self.playStateChanged.emit(False)
             
     def closeEvent(self, event):
-        """Clean up when widget is closed"""
         if self.video_capture:
             self.video_capture.release()
         super().closeEvent(event)
         
     def get_video_info(self):
-        """Get video information"""
         if self.is_video and self.video_capture:
             return {
                 'is_video': True,
