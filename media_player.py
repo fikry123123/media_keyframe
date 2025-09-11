@@ -22,7 +22,8 @@ class MediaPlayer(QWidget):
         self.video_timer = QTimer()
         self.video_timer.timeout.connect(self.update_video_frame)
         self.fps = 30  # Default FPS
-        
+        self.current_media_path = None # Melacak path file saat ini
+
     def setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -44,6 +45,8 @@ class MediaPlayer(QWidget):
         layout.addWidget(self.video_label)
         
     def load_media(self, file_path):
+        self.clear_media() # Hapus media sebelumnya sebelum memuat yang baru
+        self.current_media_path = None # Reset path di awal
         try:
             print(f"Attempting to load: {file_path}")
             
@@ -73,6 +76,7 @@ class MediaPlayer(QWidget):
                         self.frameIndexChanged.emit(0, self.total_frames)
                         self.fpsChanged.emit(self.fps) # Kirimkan nilai FPS
                         self.frameReady.emit()
+                        self.current_media_path = file_path # Simpan path
                         return True
                 else:
                     print(f"Could not read frame from video: {file_path}")
@@ -91,6 +95,7 @@ class MediaPlayer(QWidget):
                 self.frameIndexChanged.emit(0, 1)
                 self.fpsChanged.emit(0.0) # FPS 0 untuk gambar statis
                 self.frameReady.emit()
+                self.current_media_path = file_path # Simpan path
                 return True
                 
         except Exception as e:
@@ -163,7 +168,7 @@ class MediaPlayer(QWidget):
         self.playStateChanged.emit(self.is_playing)
             
     def play(self):
-        if not self.is_playing:
+        if not self.is_playing and self.is_video:
             print("Pemutaran dimulai")
             interval = int(1000 / self.fps)
             self.video_timer.start(interval)
@@ -247,7 +252,31 @@ class MediaPlayer(QWidget):
         if self.video_capture:
             self.video_capture.release()
         super().closeEvent(event)
+
+    def has_media(self):
+        """Mengembalikan True jika ada media yang dimuat."""
+        return self.current_media_path is not None
+
+    def get_current_file_path(self):
+        """Mengembalikan path file media yang sedang dimuat."""
+        return self.current_media_path
+
+    def clear_media(self):
+        """Menghentikan dan membersihkan media yang sedang dimuat."""
+        self.stop()
+        if self.video_capture:
+            self.video_capture.release()
+            self.video_capture = None
         
+        self.current_media_path = None
+        self.current_frame = None
+        self.total_frames = 0
+        self.current_frame_index = 0
+        self.is_video = False
+        self.video_label.setText("Load media file to start...")
+        self.frameIndexChanged.emit(0, 0)
+        self.fpsChanged.emit(0.0)
+
     def get_video_info(self):
         if self.is_video and self.video_capture:
             return {

@@ -3,7 +3,8 @@ from PyQt5.QtCore import Qt, pyqtSignal
 
 class MediaControls(QWidget):
     position_changed = pyqtSignal(int)
-    
+    compare_toggled = pyqtSignal()
+
     def __init__(self):
         super().__init__()
         self.setup_ui()
@@ -59,6 +60,12 @@ class MediaControls(QWidget):
         self.next_button.setStyleSheet(button_style)
         self.next_button.setToolTip("Next Frame (Right Arrow)")
         layout.addWidget(self.next_button)
+
+        self.compare_button = QPushButton("Compare")
+        self.compare_button.setStyleSheet(button_style)
+        self.compare_button.setToolTip("Switch to compare (side-by-side) view")
+        self.compare_button.clicked.connect(self.compare_toggled.emit)
+        layout.addWidget(self.compare_button)
         
         layout.addStretch()
 
@@ -68,3 +75,12 @@ class MediaControls(QWidget):
             self.play_button.setText("⏸")
         else:
             self.play_button.setText("▶")
+
+    def set_compare_state(self, is_comparing):
+        """Update compare button based on state"""
+        if is_comparing:
+            self.compare_button.setText("Single View")
+            self.compare_button.setToolTip("Switch to single media view")
+        else:
+            self.compare_button.setText("Compare")
+            self.compare_button.setToolTip("Switch to compare (side-by-side) view")
