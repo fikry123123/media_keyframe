@@ -77,24 +77,74 @@ class MainWindow(QMainWindow):
         self.setup_ui()
 
     def setup_ui(self):
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
+            central_widget = QWidget()
+            self.setCentralWidget(central_widget)
 
-        main_layout = QHBoxLayout(central_widget)
+            # main_layout sekarang akan menjadi pengganti splitter
+            main_layout = QHBoxLayout(central_widget)
+            main_layout.setContentsMargins(0, 0, 0, 0) # Hapus margin agar rapi
+            main_layout.setSpacing(0) # Hapus spasi antar widget
 
-        self.main_splitter = QSplitter(Qt.Horizontal)
-        main_layout.addWidget(self.main_splitter)
+            # --- Bagian yang diubah ---
+            # 1. Buat panel playlist dan panel media secara terpisah
+            # (Kita tidak lagi meneruskan splitter ke dalamnya)
+            
+            # Logika dari create_playlist_panel() dipindahkan ke sini
+            self.playlist_widget_container = QWidget()
+            playlist_layout = QVBoxLayout(self.playlist_widget_container)
+            playlist_header = QLabel("Playlist")
+            playlist_header.setStyleSheet("QLabel { color: #ffffff; font-size: 16px; font-weight: bold; padding: 8px; background-color: #444444; border-radius: 4px; margin-bottom: 5px; }")
+            playlist_layout.addWidget(playlist_header)
+            self.playlist_widget = QListWidget()
+            self.playlist_widget.setSelectionMode(QListWidget.ExtendedSelection)
+            self.playlist_widget.setDragDropMode(QListWidget.DragOnly)
+            self.playlist_widget.setDefaultDropAction(Qt.CopyAction)
+            self.playlist_widget.setStyleSheet("""
+                QListWidget { background-color: #2b2b2b; color: #ffffff; border: 2px solid #444444; border-radius: 4px; padding: 4px; font-size: 12px; }
+                QListWidget::item { padding: 6px; border-bottom: 1px solid #444444; border-radius: 2px; margin: 1px; }
+                QListWidget::item:selected { background-color: #0078d4; color: white; }
+                QListWidget::item:hover { background-color: #444444; }
+            """)
+            self.playlist_widget.itemDoubleClicked.connect(self.load_from_playlist)
+            playlist_layout.addWidget(self.playlist_widget)
 
-        self.create_playlist_panel(self.main_splitter)
-        self.create_media_panel(self.main_splitter)
+            # Logika dari create_media_panel() dipindahkan ke sini
+            media_widget = QWidget()
+            media_layout = QVBoxLayout(media_widget)
+            self.media_container = QWidget()
+            self.media_container_layout = QHBoxLayout(self.media_container)
+            self.media_container_layout.setContentsMargins(0, 0, 0, 0)
+            self.media_container_layout.setSpacing(2)
+            self.media_player = MediaPlayer()
+            self.media_container_layout.addWidget(self.media_player)
+            self.media_player_2 = MediaPlayer()
+            self.media_player_2.hide()
+            self.media_container_layout.addWidget(self.media_player_2)
+            media_layout.addWidget(self.media_container, 1)
+            self.timeline = TimelineWidget()
+            media_layout.addWidget(self.timeline)
+            self.controls = MediaControls()
+            self.controls.set_compare_state(self.compare_mode)
+            media_layout.addWidget(self.controls)
+            
+            # 2. Tambahkan kedua panel ke main_layout
+            main_layout.addWidget(self.playlist_widget_container)
+            main_layout.addWidget(media_widget)
 
-        self.main_splitter.setSizes([250, 950])
-        self.last_playlist_size = 250
+            # 3. Atur proporsi ukuran menggunakan setStretch
+            # Playlist (indeks 0) mendapat 1 bagian, Media Panel (indeks 1) mendapat 4 bagian
+            # Ini menggantikan fungsi setSizes() dari splitter
+            main_layout.setStretch(0, 1)
+            main_layout.setStretch(1, 4)
+            
+            # Variabel splitter tidak lagi dibutuhkan
+            # self.last_playlist_size = 250 (juga tidak dibutuhkan)
+            # --- Akhir bagian yang diubah ---
 
-        self.connect_signals()
-        self.create_menu_bar()
-        self.create_status_bar()
-        self.setup_shortcuts()
+            self.connect_signals()
+            self.create_menu_bar()
+            self.create_status_bar()
+            self.setup_shortcuts()
 
     def create_menu_bar(self):
         menubar = self.menuBar()
@@ -389,14 +439,14 @@ class MainWindow(QMainWindow):
         self.update_frame_counter(self.media_player.current_frame_index)
 
     def toggle_playlist_panel(self):
-            sizes = self.main_splitter.sizes()
-            if sizes[0] > 0:
-                self.last_playlist_size = sizes[0]
-                self.main_splitter.setSizes([0, sum(sizes)])
+            # Cek apakah panel playlist saat ini terlihat
+            if self.playlist_widget_container.isVisible():
+                # Jika terlihat, sembunyikan
+                self.playlist_widget_container.hide()
                 self.hide_playlist_action.setText("Show Playlist Panel")
             else:
-                total_size = sum(sizes)
-                self.main_splitter.setSizes([self.last_playlist_size, total_size - self.last_playlist_size])
+                # Jika tersembunyi, tampilkan
+                self.playlist_widget_container.show()
                 self.hide_playlist_action.setText("Hide Playlist Panel")
     def go_to_first_frame(self):
         self.seek_to_position(0)
