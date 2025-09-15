@@ -129,9 +129,14 @@ class MediaPlayer(QWidget):
                 widget_size = self.size()
                 widget_size.setWidth(target_width)
         else:
-            # Dalam mode single view, gunakan ukuran penuh dari container
-            if self.parent():
-                widget_size = self.parent().size()
+            # Dalam mode single view, gunakan ukuran widget itu sendiri, bukan parent
+            # Ini memastikan video tidak di-resize secara paksa
+            widget_size = self.size()
+            
+            # Pastikan ukuran widget valid
+            if widget_size.width() <= 0 or widget_size.height() <= 0:
+                # Fallback ke ukuran video label
+                widget_size = self.video_label.size()
         
         # Jika ukuran widget belum diinisialisasi, gunakan ukuran default
         if widget_size.width() <= 0 or widget_size.height() <= 0:

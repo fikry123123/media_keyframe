@@ -170,7 +170,8 @@ class MainWindow(QMainWindow):
 
         self.playlist_widget = QListWidget()
         self.playlist_widget.setSelectionMode(QListWidget.ExtendedSelection)
-        self.playlist_widget.setDragDropMode(QListWidget.InternalMove)
+        self.playlist_widget.setDragDropMode(QListWidget.DragOnly)  # Ubah ke DragOnly agar item tidak hilang
+        self.playlist_widget.setDefaultDropAction(Qt.CopyAction)  # Set default drop action ke Copy
         self.playlist_widget.setStyleSheet("""
             QListWidget { background-color: #2b2b2b; color: #ffffff; border: 2px solid #444444; border-radius: 4px; padding: 4px; font-size: 12px; }
             QListWidget::item { padding: 6px; border-bottom: 1px solid #444444; border-radius: 2px; margin: 1px; }
@@ -439,8 +440,7 @@ class MainWindow(QMainWindow):
     # --- FUNGSI DRAG AND DROP YANG SUDAH DIPERBAIKI ---
     # ===================================================================
     def dragEnterEvent(self, event: QDragEnterEvent):
-        # PERBAIKAN: Jika sumber drag adalah playlist, kita usulkan aksi "Copy".
-        # Ini PENTING untuk mencegah item asli dihapus dari playlist setelah di-drop.
+        # Jika sumber drag adalah playlist, terima dengan aksi copy untuk mempertahankan item
         if event.source() == self.playlist_widget:
             event.setDropAction(Qt.CopyAction)
             event.accept()
@@ -457,10 +457,16 @@ class MainWindow(QMainWindow):
         if event.source() == self.playlist_widget:
             item = self.playlist_widget.currentItem()
             if not item:
-                return # Tidak ada item yang dipilih/di-drag
+                # Paksa menggunakan CopyAction agar item tidak hilang
+                event.setDropAction(Qt.CopyAction)
+                event.accept()
+                return
 
             file_path = item.data(Qt.UserRole)
             if not file_path:
+                # Paksa menggunakan CopyAction agar item tidak hilang
+                event.setDropAction(Qt.CopyAction)
+                event.accept()
                 return
             
             # Tentukan target drop (Player A atau Player B) berdasarkan posisi mouse
@@ -481,7 +487,8 @@ class MainWindow(QMainWindow):
                 if self.compare_mode:
                     self.update_playlist_item_indicator(self.media_player_2.get_current_file_path(), "B")
 
-            # Terima event dropnya. Karena aksinya adalah Copy, item tidak akan hilang.
+            # PENTING: Paksa menggunakan CopyAction agar item tidak hilang dari playlist
+            event.setDropAction(Qt.CopyAction)
             event.accept()
             return
 
@@ -490,9 +497,7 @@ class MainWindow(QMainWindow):
             files = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
             if files:
                 self.add_files_to_playlist_from_paths(files)
-                self.toggle_compare_mode(False) # Selalu masuk mode single view
-                self.load_single_file(files[0]) # Putar file pertama yang di-drop
-                event.accept()
+                event.acceptProposedAction()
         else:
             event.ignore()
     # ===================================================================
