@@ -117,10 +117,10 @@ class MainWindow(QMainWindow):
         file_menu.addAction(clear_playlist_action)
 
         view_menu = menubar.addMenu('View')
-        self.compare_action = QAction('Toggle Compare Mode', self)
+        self.compare_action = QAction('Compare Mode', self)
         self.compare_action.setCheckable(True)
         self.compare_action.setShortcut('Ctrl+T')
-        self.compare_action.triggered.connect(self.toggle_compare_mode_from_menu)
+        self.compare_action.triggered.connect(self.toggle_compare_mode)
         view_menu.addAction(self.compare_action)
 
         self.hide_playlist_action = QAction("Hide Playlist Panel", self)
@@ -151,26 +151,10 @@ class MainWindow(QMainWindow):
         playlist_header.setStyleSheet("QLabel { color: #ffffff; font-size: 16px; font-weight: bold; padding: 8px; background-color: #444444; border-radius: 4px; margin-bottom: 5px; }")
         playlist_layout.addWidget(playlist_header)
 
-        playlist_controls = QHBoxLayout()
-        add_files_btn = QPushButton("Add Files")
-        add_files_btn.clicked.connect(self.add_files_to_playlist)
-        add_files_btn.setStyleSheet("QPushButton { background-color: #0078d4; color: white; border: none; padding: 6px 12px; border-radius: 3px; font-weight: bold; } QPushButton:hover { background-color: #106ebe; }")
-        playlist_controls.addWidget(add_files_btn)
-
-        clear_btn = QPushButton("Clear")
-        clear_btn.clicked.connect(self.clear_playlist)
-        clear_btn.setStyleSheet("QPushButton { background-color: #d13438; color: white; border: none; padding: 6px 12px; border-radius: 3px; font-weight: bold; } QPushButton:hover { background-color: #b71c1c; }")
-        playlist_controls.addWidget(clear_btn)
-
-        self.hide_panel_button = QPushButton("Hide")
-        self.hide_panel_button.clicked.connect(self.toggle_playlist_panel)
-        self.hide_panel_button.setStyleSheet("QPushButton { background-color: #4a4a4a; color: white; border: none; padding: 6px 12px; border-radius: 3px; font-weight: bold; } QPushButton:hover { background-color: #5d5d5d; }")
-        playlist_controls.addWidget(self.hide_panel_button)
-        playlist_layout.addLayout(playlist_controls)
-
         self.playlist_widget = QListWidget()
         self.playlist_widget.setSelectionMode(QListWidget.ExtendedSelection)
-        self.playlist_widget.setDragDropMode(QListWidget.InternalMove)
+        self.playlist_widget.setDragDropMode(QListWidget.DragOnly)  # Ubah ke DragOnly agar item tidak hilang
+        self.playlist_widget.setDefaultDropAction(Qt.CopyAction)  # Set default drop action ke Copy
         self.playlist_widget.setStyleSheet("""
             QListWidget { background-color: #2b2b2b; color: #ffffff; border: 2px solid #444444; border-radius: 4px; padding: 4px; font-size: 12px; }
             QListWidget::item { padding: 6px; border-bottom: 1px solid #444444; border-radius: 2px; margin: 1px; }
@@ -189,7 +173,7 @@ class MainWindow(QMainWindow):
         self.media_container = QWidget()
         self.media_container_layout = QHBoxLayout(self.media_container)
         self.media_container_layout.setContentsMargins(0, 0, 0, 0)
-        self.media_container_layout.setSpacing(0)
+        self.media_container_layout.setSpacing(2)  # Small spacing between players
 
         self.media_player = MediaPlayer()
         self.media_container_layout.addWidget(self.media_player)
@@ -373,11 +357,9 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence(Qt.Key_End), self).activated.connect(self.go_to_last_frame)
         QShortcut(QKeySequence(Qt.Key_PageUp), self).activated.connect(self.jump_backward)
         QShortcut(QKeySequence(Qt.Key_PageDown), self).activated.connect(self.jump_forward)
-        QShortcut(QKeySequence('Ctrl+T'), self).activated.connect(self.toggle_compare_mode_from_button)
         QShortcut(QKeySequence(Qt.Key_F), self).activated.connect(self.toggle_mark)
         QShortcut(QKeySequence(Qt.Key_BracketLeft), self).activated.connect(self.jump_to_previous_mark)
         QShortcut(QKeySequence(Qt.Key_BracketRight), self).activated.connect(self.jump_to_next_mark)
-        QShortcut(QKeySequence('Ctrl+H'), self).activated.connect(self.toggle_playlist_panel)
 
     def toggle_mark(self):
         current_frame = self.media_player.current_frame_index
@@ -407,18 +389,15 @@ class MainWindow(QMainWindow):
         self.update_frame_counter(self.media_player.current_frame_index)
 
     def toggle_playlist_panel(self):
-        sizes = self.main_splitter.sizes()
-        if sizes[0] > 0:
-            self.last_playlist_size = sizes[0]
-            self.main_splitter.setSizes([0, sum(sizes)])
-            self.hide_playlist_action.setText("Show Playlist")
-            self.hide_panel_button.setText("Show")
-        else:
-            total_size = sum(sizes)
-            self.main_splitter.setSizes([self.last_playlist_size, total_size - self.last_playlist_size])
-            self.hide_playlist_action.setText("Hide Playlist")
-            self.hide_panel_button.setText("Hide")
-
+            sizes = self.main_splitter.sizes()
+            if sizes[0] > 0:
+                self.last_playlist_size = sizes[0]
+                self.main_splitter.setSizes([0, sum(sizes)])
+                self.hide_playlist_action.setText("Show Playlist Panel")
+            else:
+                total_size = sum(sizes)
+                self.main_splitter.setSizes([self.last_playlist_size, total_size - self.last_playlist_size])
+                self.hide_playlist_action.setText("Hide Playlist Panel")
     def go_to_first_frame(self):
         self.seek_to_position(0)
 
@@ -439,8 +418,7 @@ class MainWindow(QMainWindow):
     # --- FUNGSI DRAG AND DROP YANG SUDAH DIPERBAIKI ---
     # ===================================================================
     def dragEnterEvent(self, event: QDragEnterEvent):
-        # PERBAIKAN: Jika sumber drag adalah playlist, kita usulkan aksi "Copy".
-        # Ini PENTING untuk mencegah item asli dihapus dari playlist setelah di-drop.
+        # Jika sumber drag adalah playlist, terima dengan aksi copy untuk mempertahankan item
         if event.source() == self.playlist_widget:
             event.setDropAction(Qt.CopyAction)
             event.accept()
@@ -457,10 +435,16 @@ class MainWindow(QMainWindow):
         if event.source() == self.playlist_widget:
             item = self.playlist_widget.currentItem()
             if not item:
-                return # Tidak ada item yang dipilih/di-drag
+                # Paksa menggunakan CopyAction agar item tidak hilang
+                event.setDropAction(Qt.CopyAction)
+                event.accept()
+                return
 
             file_path = item.data(Qt.UserRole)
             if not file_path:
+                # Paksa menggunakan CopyAction agar item tidak hilang
+                event.setDropAction(Qt.CopyAction)
+                event.accept()
                 return
             
             # Tentukan target drop (Player A atau Player B) berdasarkan posisi mouse
@@ -481,7 +465,8 @@ class MainWindow(QMainWindow):
                 if self.compare_mode:
                     self.update_playlist_item_indicator(self.media_player_2.get_current_file_path(), "B")
 
-            # Terima event dropnya. Karena aksinya adalah Copy, item tidak akan hilang.
+            # PENTING: Paksa menggunakan CopyAction agar item tidak hilang dari playlist
+            event.setDropAction(Qt.CopyAction)
             event.accept()
             return
 
@@ -490,9 +475,7 @@ class MainWindow(QMainWindow):
             files = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
             if files:
                 self.add_files_to_playlist_from_paths(files)
-                self.toggle_compare_mode(False) # Selalu masuk mode single view
-                self.load_single_file(files[0]) # Putar file pertama yang di-drop
-                event.accept()
+                event.acceptProposedAction()
         else:
             event.ignore()
     # ===================================================================
@@ -592,17 +575,82 @@ class MainWindow(QMainWindow):
         self.compare_action.setChecked(self.compare_mode)
         self.controls.set_compare_state(self.compare_mode)
 
+        # Set compare mode untuk kedua media player
+        self.media_player.set_compare_mode(self.compare_mode)
+        self.media_player_2.set_compare_mode(self.compare_mode)
+
         if self.compare_mode:
             self.media_player_2.show()
+            # Force equal sizing immediately
+            QTimer.singleShot(10, self.ensure_equal_video_sizes)
             self.status_bar.showMessage("Compare mode enabled.")
         else:
             self.media_player_2.hide()
             self.media_player_2.clear_media()
+            # Reset sizing for single player - remove all size constraints completely
+            self.media_player.setMinimumWidth(0)
+            self.media_player.setMaximumWidth(16777215)
+            self.media_player.setMinimumHeight(0)
+            self.media_player.setMaximumHeight(16777215)
+            
+            # Clear any fixed sizing
+            self.media_player.setFixedWidth(16777215)
+            self.media_player.setFixedHeight(16777215)
+            
+            # Reset video label size constraints completely
+            self.media_player.video_label.setMinimumSize(0, 0)
+            self.media_player.video_label.setMaximumSize(16777215, 16777215)
+            self.media_player.video_label.setFixedSize(16777215, 16777215)
+            
+            # Force widget to take full container space
+            self.media_player.setSizePolicy(self.media_player.sizePolicy().Expanding, self.media_player.sizePolicy().Expanding)
+            
+            # Update layout to ensure proper sizing
+            self.media_container_layout.invalidate()
+            self.media_container.updateGeometry()
+            
+            # Force re-display with proper sizing
+            if self.media_player.current_frame is not None:
+                QTimer.singleShot(100, lambda: self.media_player.display_frame(self.media_player.current_frame))
+                
             self.reset_playlist_indicators()
             current_file_A = self.media_player.get_current_file_path()
             if current_file_A:
                 self.update_playlist_item_indicator(current_file_A, "A")
             self.status_bar.showMessage("Single view mode enabled.")
+
+    def set_compare_mode_for_players(self, enabled):
+        """Set mode compare untuk kedua media player."""
+        self.media_player.set_compare_mode(enabled)
+        self.media_player_2.set_compare_mode(enabled)
+
+    def ensure_equal_video_sizes(self):
+        """Pastikan kedua video player memiliki ukuran yang sama dalam mode compare."""
+        if self.compare_mode:
+            # Force equal width for both players
+            container_width = self.media_container.width()
+            player_width = (container_width - 10) // 2  # 10 adalah total spacing
+            
+            # Set fixed widths to ensure consistency
+            self.media_player.setFixedWidth(player_width)
+            self.media_player_2.setFixedWidth(player_width)
+            
+            # Set ukuran video label yang sama untuk kedua player
+            self.media_player.video_label.setFixedSize(player_width, self.media_container.height() - 20)
+            self.media_player_2.video_label.setFixedSize(player_width, self.media_container.height() - 20)
+            
+            # Update both players to display frames with same scaling
+            if self.media_player.current_frame is not None:
+                self.media_player.display_frame(self.media_player.current_frame)
+            if self.media_player_2.current_frame is not None:
+                self.media_player_2.display_frame(self.media_player_2.current_frame)
+
+    def resizeEvent(self, event):
+        """Handle window resize and maintain equal video sizes."""
+        super().resizeEvent(event)
+        if self.compare_mode:
+            # Delay to ensure layout is updated
+            QTimer.singleShot(50, self.ensure_equal_video_sizes)
 
     def reset_playlist_indicators(self):
         for i in range(self.playlist_widget.count()):
