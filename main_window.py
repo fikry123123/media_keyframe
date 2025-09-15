@@ -1,10 +1,12 @@
 import os
 import glob
+import cv2
+import numpy as np
 from PyQt5.QtWidgets import (QMainWindow, QVBoxLayout, QWidget, QMenuBar, QAction,
                             QFileDialog, QHBoxLayout, QStatusBar, QLabel, QSplitter,
                             QListWidget, QListWidgetItem, QPushButton, QShortcut)
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
-from PyQt5.QtGui import QDragEnterEvent, QDropEvent, QKeySequence
+from PyQt5.QtGui import QDragEnterEvent, QDropEvent, QKeySequence, QPixmap
 from media_player import MediaPlayer
 from media_controls import MediaControls
 from timeline_widget import TimelineWidget
@@ -80,16 +82,10 @@ class MainWindow(QMainWindow):
             central_widget = QWidget()
             self.setCentralWidget(central_widget)
 
-            # main_layout sekarang akan menjadi pengganti splitter
             main_layout = QHBoxLayout(central_widget)
-            main_layout.setContentsMargins(0, 0, 0, 0) # Hapus margin agar rapi
-            main_layout.setSpacing(0) # Hapus spasi antar widget
+            main_layout.setContentsMargins(0, 0, 0, 0)
+            main_layout.setSpacing(0) 
 
-            # --- Bagian yang diubah ---
-            # 1. Buat panel playlist dan panel media secara terpisah
-            # (Kita tidak lagi meneruskan splitter ke dalamnya)
-            
-            # Logika dari create_playlist_panel() dipindahkan ke sini
             self.playlist_widget_container = QWidget()
             playlist_layout = QVBoxLayout(self.playlist_widget_container)
             playlist_header = QLabel("Playlist")
@@ -108,18 +104,17 @@ class MainWindow(QMainWindow):
             self.playlist_widget.itemDoubleClicked.connect(self.load_from_playlist)
             playlist_layout.addWidget(self.playlist_widget)
 
-            # Logika dari create_media_panel() dipindahkan ke sini
             media_widget = QWidget()
             media_layout = QVBoxLayout(media_widget)
             self.media_container = QWidget()
             self.media_container_layout = QHBoxLayout(self.media_container)
             self.media_container_layout.setContentsMargins(0, 0, 0, 0)
-            self.media_container_layout.setSpacing(2)
+            self.media_container_layout.setSpacing(0)
             self.media_player = MediaPlayer()
             self.media_container_layout.addWidget(self.media_player)
+            
             self.media_player_2 = MediaPlayer()
-            self.media_player_2.hide()
-            self.media_container_layout.addWidget(self.media_player_2)
+
             media_layout.addWidget(self.media_container, 1)
             self.timeline = TimelineWidget()
             media_layout.addWidget(self.timeline)
@@ -127,20 +122,12 @@ class MainWindow(QMainWindow):
             self.controls.set_compare_state(self.compare_mode)
             media_layout.addWidget(self.controls)
             
-            # 2. Tambahkan kedua panel ke main_layout
             main_layout.addWidget(self.playlist_widget_container)
             main_layout.addWidget(media_widget)
 
-            # 3. Atur proporsi ukuran menggunakan setStretch
-            # Playlist (indeks 0) mendapat 1 bagian, Media Panel (indeks 1) mendapat 4 bagian
-            # Ini menggantikan fungsi setSizes() dari splitter
             main_layout.setStretch(0, 1)
             main_layout.setStretch(1, 4)
             
-            # Variabel splitter tidak lagi dibutuhkan
-            # self.last_playlist_size = 250 (juga tidak dibutuhkan)
-            # --- Akhir bagian yang diubah ---
-
             self.connect_signals()
             self.create_menu_bar()
             self.create_status_bar()
@@ -170,7 +157,7 @@ class MainWindow(QMainWindow):
         self.compare_action = QAction('Compare Mode', self)
         self.compare_action.setCheckable(True)
         self.compare_action.setShortcut('Ctrl+T')
-        self.compare_action.triggered.connect(self.toggle_compare_mode)
+        self.compare_action.triggered.connect(lambda: self.toggle_compare_mode(self.compare_action.isChecked()))
         view_menu.addAction(self.compare_action)
 
         self.hide_playlist_action = QAction("Hide Playlist Panel", self)
@@ -192,56 +179,6 @@ class MainWindow(QMainWindow):
 
         self.status_bar.setStyleSheet("QStatusBar { font-size: 12px; font-weight: bold; }")
         self.status_bar.showMessage("Ready")
-
-    def create_playlist_panel(self, parent_splitter):
-        self.playlist_widget_container = QWidget()
-        playlist_layout = QVBoxLayout(self.playlist_widget_container)
-
-        playlist_header = QLabel("Playlist")
-        playlist_header.setStyleSheet("QLabel { color: #ffffff; font-size: 16px; font-weight: bold; padding: 8px; background-color: #444444; border-radius: 4px; margin-bottom: 5px; }")
-        playlist_layout.addWidget(playlist_header)
-
-        self.playlist_widget = QListWidget()
-        self.playlist_widget.setSelectionMode(QListWidget.ExtendedSelection)
-        self.playlist_widget.setDragDropMode(QListWidget.DragOnly)  # Ubah ke DragOnly agar item tidak hilang
-        self.playlist_widget.setDefaultDropAction(Qt.CopyAction)  # Set default drop action ke Copy
-        self.playlist_widget.setStyleSheet("""
-            QListWidget { background-color: #2b2b2b; color: #ffffff; border: 2px solid #444444; border-radius: 4px; padding: 4px; font-size: 12px; }
-            QListWidget::item { padding: 6px; border-bottom: 1px solid #444444; border-radius: 2px; margin: 1px; }
-            QListWidget::item:selected { background-color: #0078d4; color: white; }
-            QListWidget::item:hover { background-color: #444444; }
-        """)
-        self.playlist_widget.itemDoubleClicked.connect(self.load_from_playlist)
-        playlist_layout.addWidget(self.playlist_widget)
-
-        parent_splitter.addWidget(self.playlist_widget_container)
-
-    def create_media_panel(self, parent_splitter):
-        media_widget = QWidget()
-        media_layout = QVBoxLayout(media_widget)
-
-        self.media_container = QWidget()
-        self.media_container_layout = QHBoxLayout(self.media_container)
-        self.media_container_layout.setContentsMargins(0, 0, 0, 0)
-        self.media_container_layout.setSpacing(2)  # Small spacing between players
-
-        self.media_player = MediaPlayer()
-        self.media_container_layout.addWidget(self.media_player)
-
-        self.media_player_2 = MediaPlayer()
-        self.media_player_2.hide()
-        self.media_container_layout.addWidget(self.media_player_2)
-
-        media_layout.addWidget(self.media_container, 1)
-
-        self.timeline = TimelineWidget()
-        media_layout.addWidget(self.timeline)
-
-        self.controls = MediaControls()
-        self.controls.set_compare_state(self.compare_mode)
-        media_layout.addWidget(self.controls)
-
-        parent_splitter.addWidget(media_widget)
 
     def connect_signals(self):
         self.controls.play_button.clicked.connect(self.toggle_play)
@@ -267,7 +204,8 @@ class MainWindow(QMainWindow):
         file_path, _ = QFileDialog.getOpenFileName(self, "Open Media File", "", "Media Files (*.mp4 *.avi *.mov *.mkv *.jpg *.jpeg *.png *.bmp *.tiff);;All Files (*)")
         if file_path:
             self.add_files_to_playlist_from_paths([file_path])
-            self.toggle_compare_mode(False)
+            if self.compare_mode:
+                self.toggle_compare_mode(False)
             self.load_single_file(file_path)
 
     def open_image_sequence(self):
@@ -283,7 +221,8 @@ class MainWindow(QMainWindow):
 
             if self.image_sequence_files:
                 self.current_sequence_index = 0
-                self.toggle_compare_mode(False)
+                if self.compare_mode:
+                    self.toggle_compare_mode(False)
                 self.load_sequence_frame(0)
                 self.timeline.set_duration(len(self.image_sequence_files))
                 self.update_frame_counter(0, len(self.image_sequence_files))
@@ -316,14 +255,11 @@ class MainWindow(QMainWindow):
                 self.sequence_timer.start(interval)
                 self.controls.set_play_state(True)
         else:
+            is_playing_before_toggle = self.media_player.is_playing
+            self.media_player.toggle_play()
             if self.compare_mode:
-                is_playing_before_toggle = self.media_player.is_playing
-                self.media_player.toggle_play()
                 self.media_player_2.toggle_play()
-                self.controls.set_play_state(not is_playing_before_toggle)
-            else:
-                self.media_player.toggle_play()
-                self.controls.set_play_state(self.media_player.is_playing)
+            self.controls.set_play_state(not is_playing_before_toggle)
 
     def next_sequence_frame(self):
         if self.current_sequence_index < len(self.image_sequence_files) - 1:
@@ -371,8 +307,11 @@ class MainWindow(QMainWindow):
 
     def update_frame_counter(self, current_frame, total_frames=None):
         active_player = self.media_player
-        if total_frames is None:
+        if total_frames is None and active_player.has_media():
             total_frames = active_player.total_frames
+        elif not active_player.has_media():
+             total_frames = 0
+             current_frame = 0
 
         self.timeline.set_marks(self.marks)
         fps_for_timecode = self.media_player_A_fps
@@ -380,15 +319,12 @@ class MainWindow(QMainWindow):
         if self.show_timecode and fps_for_timecode > 0 and total_frames > 0:
             total_seconds_val = total_frames / fps_for_timecode
             current_seconds_val = current_frame / fps_for_timecode
-
             total_minutes = int(total_seconds_val // 60)
             total_seconds_part = int(total_seconds_val % 60)
             total_frames_part = int((total_seconds_val - int(total_seconds_val)) * fps_for_timecode)
-
             current_minutes = int(current_seconds_val // 60)
             current_seconds = int(current_seconds_val % 60)
             current_frames_rem = int((current_seconds_val - int(current_seconds_val)) * fps_for_timecode)
-
             self.frame_counter_label.setText(f"Time: {current_minutes:02d}:{current_seconds:02d}.{current_frames_rem:02d} / {total_minutes:02d}:{total_seconds_part:02d}.{total_frames_part:02d}")
             self.timeline.set_timecode_mode(True)
         else:
@@ -398,6 +334,9 @@ class MainWindow(QMainWindow):
         self.timeline.set_fps(fps_for_timecode)
         self.timeline.set_duration(total_frames)
         self.timeline.set_position(current_frame)
+        
+        if self.compare_mode:
+            self.update_composite_view()
 
     def setup_shortcuts(self):
         QShortcut(QKeySequence(Qt.Key_Space), self).activated.connect(self.toggle_play)
@@ -439,15 +378,13 @@ class MainWindow(QMainWindow):
         self.update_frame_counter(self.media_player.current_frame_index)
 
     def toggle_playlist_panel(self):
-            # Cek apakah panel playlist saat ini terlihat
             if self.playlist_widget_container.isVisible():
-                # Jika terlihat, sembunyikan
                 self.playlist_widget_container.hide()
                 self.hide_playlist_action.setText("Show Playlist Panel")
             else:
-                # Jika tersembunyi, tampilkan
                 self.playlist_widget_container.show()
                 self.hide_playlist_action.setText("Hide Playlist Panel")
+
     def go_to_first_frame(self):
         self.seek_to_position(0)
 
@@ -464,71 +401,55 @@ class MainWindow(QMainWindow):
         total = len(self.image_sequence_files) if self.image_sequence_files else self.media_player.total_frames
         self.seek_to_position(min(total - 1, current + frames))
 
-    # ===================================================================
-    # --- FUNGSI DRAG AND DROP YANG SUDAH DIPERBAIKI ---
-    # ===================================================================
     def dragEnterEvent(self, event: QDragEnterEvent):
-        # Jika sumber drag adalah playlist, terima dengan aksi copy untuk mempertahankan item
         if event.source() == self.playlist_widget:
             event.setDropAction(Qt.CopyAction)
             event.accept()
             return
 
-        # Logika untuk menerima file dari luar (File Explorer)
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
         else:
             event.ignore()
 
     def dropEvent(self, event: QDropEvent):
-        # Cek jika sumber drop adalah dari playlist
         if event.source() == self.playlist_widget:
             item = self.playlist_widget.currentItem()
             if not item:
-                # Paksa menggunakan CopyAction agar item tidak hilang
                 event.setDropAction(Qt.CopyAction)
                 event.accept()
                 return
 
             file_path = item.data(Qt.UserRole)
             if not file_path:
-                # Paksa menggunakan CopyAction agar item tidak hilang
                 event.setDropAction(Qt.CopyAction)
                 event.accept()
                 return
             
-            # Tentukan target drop (Player A atau Player B) berdasarkan posisi mouse
-            drop_pos = event.pos()
-            pos_in_container = self.media_container.mapFrom(self, drop_pos)
+            if self.compare_mode:
+                if not self.media_player.has_media():
+                    self.load_single_file(file_path)
+                else:
+                    self.media_player_2.load_media(file_path)
+                    self.reset_playlist_indicators()
+                    self.update_playlist_item_indicator(self.media_player.get_current_file_path(), "A")
+                    self.update_playlist_item_indicator(file_path, "B")
+            else:
+                self.load_single_file(file_path)
 
-            # Cek apakah drop terjadi di area Player B (dan sedang dalam compare mode)
-            if self.compare_mode and self.media_player_2.geometry().contains(pos_in_container):
-                self.media_player_2.load_media(file_path)
-                self.reset_playlist_indicators()
-                self.update_playlist_item_indicator(self.media_player.get_current_file_path(), "A")
-                self.update_playlist_item_indicator(file_path, "B")
-            # Jika tidak, anggap drop terjadi di area Player A
-            elif self.media_player.geometry().contains(pos_in_container):
-                self.media_player.load_media(file_path)
-                self.reset_playlist_indicators()
-                self.update_playlist_item_indicator(file_path, "A")
-                if self.compare_mode:
-                    self.update_playlist_item_indicator(self.media_player_2.get_current_file_path(), "B")
-
-            # PENTING: Paksa menggunakan CopyAction agar item tidak hilang dari playlist
             event.setDropAction(Qt.CopyAction)
             event.accept()
             return
 
-        # Logika jika drop berasal dari luar aplikasi (File Explorer)
         if event.mimeData().hasUrls():
             files = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
             if files:
                 self.add_files_to_playlist_from_paths(files)
+                if not self.media_player.has_media() and not self.compare_mode:
+                    self.load_single_file(files[0])
                 event.acceptProposedAction()
         else:
             event.ignore()
-    # ===================================================================
 
     def add_files_to_playlist(self):
         files, _ = QFileDialog.getOpenFileNames(self, "Add Files", "", "Media Files (*.*)")
@@ -550,13 +471,18 @@ class MainWindow(QMainWindow):
         self.playlist_widget.clear()
         self.media_player.clear_media()
         self.media_player_2.clear_media()
-        self.toggle_compare_mode(False)
+        
+        if self.compare_mode:
+            # Perbarui tampilan untuk menunjukkan placeholder A dan B
+            self.update_composite_view()
+        
         self.status_bar.showMessage("Playlist cleared")
 
     def load_from_playlist(self, item):
         file_path = item.data(Qt.UserRole)
         if file_path and os.path.exists(file_path):
-            self.toggle_compare_mode(False)
+            if self.compare_mode:
+                self.toggle_compare_mode(False)
             self.load_single_file(file_path)
 
     def load_single_file(self, file_path):
@@ -580,6 +506,7 @@ class MainWindow(QMainWindow):
         self.update_playlist_item_indicator(file1, "A")
         self.update_playlist_item_indicator(file2, "B")
         self.timeline.set_marks(self.marks)
+        QTimer.singleShot(50, self.update_composite_view)
 
     def sync_playlist_data(self):
         new_playlist_order = []
@@ -590,130 +517,133 @@ class MainWindow(QMainWindow):
             if found_item:
                 new_playlist_order.append(found_item)
         self.playlist_items = new_playlist_order
-        print("Playlist order synchronized.")
 
     def toggle_compare_mode_from_button(self):
-        if not self.compare_mode:
-            self.toggle_compare_mode(True)
+        is_entering_compare = not self.compare_mode
+        self.toggle_compare_mode(is_entering_compare)
+        
+        if is_entering_compare:
             selected_items = self.playlist_widget.selectedItems()
             if len(selected_items) == 2:
                 file1 = selected_items[0].data(Qt.UserRole)
                 file2 = selected_items[1].data(Qt.UserRole)
                 self.load_compare_files(file1, file2)
-            elif len(selected_items) == 1:
-                file1 = selected_items[0].data(Qt.UserRole)
-                self.media_player.load_media(file1)
-                self.media_player_2.clear_media()
-                self.reset_playlist_indicators()
-                self.update_playlist_item_indicator(file1, "A")
+            elif len(selected_items) == 1 and self.media_player.has_media():
+                file_b = selected_items[0].data(Qt.UserRole)
+                file_a = self.media_player.get_current_file_path()
+                if file_a != file_b:
+                    self.load_compare_files(file_a, file_b)
             else:
                 self.media_player_2.clear_media()
-                self.reset_playlist_indicators()
-                current_file_A = self.media_player.get_current_file_path()
-                if current_file_A:
-                    self.update_playlist_item_indicator(current_file_A, "A")
-        else:
-            self.toggle_compare_mode(False)
-
-    def toggle_compare_mode_from_menu(self):
-        self.toggle_compare_mode(self.compare_action.isChecked())
+                self.update_composite_view()
 
     def toggle_compare_mode(self, enabled):
         if enabled == self.compare_mode:
             return
+        
         self.compare_mode = enabled
         self.compare_action.setChecked(self.compare_mode)
         self.controls.set_compare_state(self.compare_mode)
 
-        # Set compare mode untuk kedua media player
-        self.media_player.set_compare_mode(self.compare_mode)
-        self.media_player_2.set_compare_mode(self.compare_mode)
-
         if self.compare_mode:
-            self.media_player_2.show()
-            # Force equal sizing immediately
-            QTimer.singleShot(10, self.ensure_equal_video_sizes)
             self.status_bar.showMessage("Compare mode enabled.")
+            self.update_composite_view()
         else:
-            self.media_player_2.hide()
             self.media_player_2.clear_media()
-            # Reset sizing for single player - remove all size constraints completely
-            self.media_player.setMinimumWidth(0)
-            self.media_player.setMaximumWidth(16777215)
-            self.media_player.setMinimumHeight(0)
-            self.media_player.setMaximumHeight(16777215)
+            self.status_bar.showMessage("Single view mode enabled.")
             
-            # Clear any fixed sizing
-            self.media_player.setFixedWidth(16777215)
-            self.media_player.setFixedHeight(16777215)
-            
-            # Reset video label size constraints completely
-            self.media_player.video_label.setMinimumSize(0, 0)
-            self.media_player.video_label.setMaximumSize(16777215, 16777215)
-            self.media_player.video_label.setFixedSize(16777215, 16777215)
-            
-            # Force widget to take full container space
-            self.media_player.setSizePolicy(self.media_player.sizePolicy().Expanding, self.media_player.sizePolicy().Expanding)
-            
-            # Update layout to ensure proper sizing
-            self.media_container_layout.invalidate()
-            self.media_container.updateGeometry()
-            
-            # Force re-display with proper sizing
             if self.media_player.current_frame is not None:
-                QTimer.singleShot(100, lambda: self.media_player.display_frame(self.media_player.current_frame))
-                
+                self.media_player.display_frame(self.media_player.current_frame)
+            else:
+                # Jika tidak ada frame, pastikan label kembali ke teks default
+                self.media_player.video_label.setText("Load media file to start...")
+            
             self.reset_playlist_indicators()
             current_file_A = self.media_player.get_current_file_path()
             if current_file_A:
                 self.update_playlist_item_indicator(current_file_A, "A")
-            self.status_bar.showMessage("Single view mode enabled.")
+    
+    def create_placeholder_frame(self, text, width, height):
+        """Membuat frame hitam dengan teks di tengahnya."""
+        placeholder = np.zeros((height, width, 3), dtype=np.uint8)
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = min(width / 400, height / 300) # Skala font dinamis
+        if font_scale < 0.5: font_scale = 0.5
+        font_thickness = 1
+        color = (204, 204, 204)  # Warna #cccccc
 
-    def set_compare_mode_for_players(self, enabled):
-        """Set mode compare untuk kedua media player."""
-        self.media_player.set_compare_mode(enabled)
-        self.media_player_2.set_compare_mode(enabled)
+        text_size = cv2.getTextSize(text, font, font_scale, font_thickness)[0]
+        text_x = (width - text_size[0]) // 2
+        text_y = (height + text_size[1]) // 2
 
-    def ensure_equal_video_sizes(self):
-        """Pastikan kedua video player memiliki ukuran yang sama dalam mode compare."""
-        if self.compare_mode:
-            # Force equal width for both players
-            container_width = self.media_container.width()
-            player_width = (container_width - 10) // 2  # 10 adalah total spacing
-            
-            # Set fixed widths to ensure consistency
-            self.media_player.setFixedWidth(player_width)
-            self.media_player_2.setFixedWidth(player_width)
-            
-            # Set ukuran video label yang sama untuk kedua player
-            self.media_player.video_label.setFixedSize(player_width, self.media_container.height() - 20)
-            self.media_player_2.video_label.setFixedSize(player_width, self.media_container.height() - 20)
-            
-            # Update both players to display frames with same scaling
-            if self.media_player.current_frame is not None:
-                self.media_player.display_frame(self.media_player.current_frame)
-            if self.media_player_2.current_frame is not None:
-                self.media_player_2.display_frame(self.media_player_2.current_frame)
+        cv2.putText(placeholder, text, (text_x, text_y), font, font_scale, color, font_thickness)
+        return placeholder
 
-    def resizeEvent(self, event):
-        """Handle window resize and maintain equal video sizes."""
-        super().resizeEvent(event)
-        if self.compare_mode:
-            # Delay to ensure layout is updated
-            QTimer.singleShot(50, self.ensure_equal_video_sizes)
+    def update_composite_view(self):
+        """Menggabungkan frame dari player A dan B, atau membuat placeholder jika kosong."""
+        if not self.compare_mode:
+            return
+
+        frame_a = self.media_player.current_frame
+        frame_b = self.media_player_2.current_frame
+
+        # Kasus 1: Keduanya kosong, tampilkan dua placeholder
+        if frame_a is None and frame_b is None:
+            container_size = self.media_player.size()
+            h = container_size.height()
+            w = container_size.width() // 2
+            if h <= 10 or w <= 10:  # Hindari error jika ukuran window terlalu kecil
+                self.media_player.video_label.setPixmap(QPixmap())
+                self.media_player.video_label.setText("")
+                return
+
+            placeholder_a = self.create_placeholder_frame("Load Media for A", w, h)
+            placeholder_b = self.create_placeholder_frame("Load Media for B", w, h)
+            composite_frame = cv2.hconcat([placeholder_a, placeholder_b])
+            self.media_player.display_frame(composite_frame)
+            return
+
+        # Tentukan tinggi referensi dari frame yang ada
+        ref_h = frame_a.shape[0] if frame_a is not None else frame_b.shape[0]
+        
+        # Proses Frame A: Jika kosong, buat placeholder
+        if frame_a is None:
+            ref_w = frame_b.shape[1]  # Gunakan lebar B sebagai referensi
+            frame_a = self.create_placeholder_frame("Load Media for A", ref_w, ref_h)
+
+        # Proses Frame B: Jika kosong, buat placeholder
+        if frame_b is None:
+            ref_w = frame_a.shape[1] # Gunakan lebar A sebagai referensi
+            frame_b = self.create_placeholder_frame("Load Media for B", ref_w, ref_h)
+
+        # Samakan tinggi Frame B dengan Frame A
+        h_a, _, _ = frame_a.shape
+        h_b, w_b, _ = frame_b.shape
+        if h_a != h_b:
+            scale = h_a / h_b
+            new_w_b = int(w_b * scale)
+            interpolation = cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR
+            frame_b_resized = cv2.resize(frame_b, (new_w_b, h_a), interpolation=interpolation)
+        else:
+            frame_b_resized = frame_b
+
+        # Gabungkan dan tampilkan
+        composite_frame = cv2.hconcat([frame_a, frame_b_resized])
+        self.media_player.display_frame(composite_frame)
 
     def reset_playlist_indicators(self):
         for i in range(self.playlist_widget.count()):
             item = self.playlist_widget.item(i)
             text = item.text()
-            item.setText(text.replace(" (A)", "").replace(" (B)", ""))
+            cleaned_text = text.split(" (")[0]
+            item.setText(cleaned_text)
 
     def update_playlist_item_indicator(self, file_path, indicator):
         if not file_path: return
         for i in range(self.playlist_widget.count()):
             item = self.playlist_widget.item(i)
             if item.data(Qt.UserRole) == file_path:
-                text = item.text().replace(" (A)", "").replace(" (B)", "")
+                text = item.text().split(" (")[0]
                 item.setText(f"{text} ({indicator})")
                 break
 

@@ -23,7 +23,7 @@ class MediaPlayer(QWidget):
         self.video_timer.timeout.connect(self.update_video_frame)
         self.fps = 30  # Default FPS
         self.current_media_path = None # Melacak path file saat ini
-        self.is_comparing = False  # Status mode banding
+        # self.is_comparing = False # Hapus status mode banding
 
     def setup_ui(self):
         layout = QVBoxLayout(self)
@@ -117,37 +117,18 @@ class MediaPlayer(QWidget):
             
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         
-        # Ambil ukuran widget untuk penskalaan
+        # Ambil ukuran widget untuk penskalaan (logika disederhanakan)
         widget_size = self.size()
-        
-        # Dalam mode compare, paksa ukuran yang sama
-        if self.is_comparing:
-            # Gunakan ukuran parent container dibagi 2 untuk mode compare
-            if self.parent():
-                parent_width = self.parent().width()
-                target_width = parent_width // 2 - 5  # Minus spacing
-                widget_size = self.size()
-                widget_size.setWidth(target_width)
-        else:
-            # Dalam mode single view, gunakan ukuran widget itu sendiri, bukan parent
-            # Ini memastikan video tidak di-resize secara paksa
-            widget_size = self.size()
             
-            # Pastikan ukuran widget valid
-            if widget_size.width() <= 0 or widget_size.height() <= 0:
-                # Fallback ke ukuran video label
-                widget_size = self.video_label.size()
+        # Pastikan ukuran widget valid
+        if widget_size.width() <= 0 or widget_size.height() <= 0:
+            widget_size = self.video_label.size()
         
         # Jika ukuran widget belum diinisialisasi, gunakan ukuran default
         if widget_size.width() <= 0 or widget_size.height() <= 0:
             widget_size = self.video_label.sizeHint()
             
-        frame_height, frame_width = rgb_frame.shape[:2]
-        
-        # Perhitungan lebar/tinggi
-        target_width, target_height = widget_size.width(), widget_size.height()
-        
-        if target_width <= 0 or target_height <= 0:
+        if widget_size.width() <= 0 or widget_size.height() <= 0:
             return
             
         # Convert to QImage first
@@ -300,12 +281,6 @@ class MediaPlayer(QWidget):
                 'is_playing': self.is_playing
             }
         return {'is_video': False}
-    
-    def set_compare_mode(self, is_comparing):
-        """Set apakah media player dalam mode compare."""
-        self.is_comparing = is_comparing
-        if self.current_frame is not None:
-            self.display_frame(self.current_frame)
     
     def get_scaled_size(self, frame_size, container_size):
         """Calculate scaled size while maintaining aspect ratio."""
