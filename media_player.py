@@ -23,6 +23,7 @@ class MediaPlayer(QWidget):
         self.video_timer.timeout.connect(self.update_video_frame)
         self.fps = 30  # Default FPS
         self.current_media_path = None # Melacak path file saat ini
+        self.is_comparing = False  # Status mode banding
 
     def setup_ui(self):
         layout = QVBoxLayout(self)
@@ -30,6 +31,7 @@ class MediaPlayer(QWidget):
         
         self.video_label = QLabel()
         self.video_label.setAlignment(Qt.AlignCenter)
+        self.video_label.setScaledContents(False)  # Prevent auto-scaling that might cause size differences
         self.video_label.setStyleSheet("""
             QLabel {
                 background-color: #1a1a1a;
@@ -115,38 +117,41 @@ class MediaPlayer(QWidget):
             
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         
-        # Ambil ukuran QLabel untuk penskalaan
-        label_size = self.video_label.size()
+        # Ambil ukuran widget untuk penskalaan
+        widget_size = self.size()
         
-        # Jika ukuran label belum diinisialisasi atau terlalu kecil, gunakan ukuran hint sebagai fallback
-        if label_size.width() <= 0 or label_size.height() <= 0:
-            label_size = self.video_label.sizeHint()
+        # Dalam mode compare, paksa ukuran yang sama
+        if self.is_comparing:
+            # Gunakan ukuran parent container dibagi 2 untuk mode compare
+            if self.parent():
+                parent_width = self.parent().width()
+                target_width = parent_width // 2 - 5  # Minus spacing
+                widget_size = self.size()
+                widget_size.setWidth(target_width)
+        
+        # Jika ukuran widget belum diinisialisasi, gunakan ukuran default
+        if widget_size.width() <= 0 or widget_size.height() <= 0:
+            widget_size = self.video_label.sizeHint()
             
         frame_height, frame_width = rgb_frame.shape[:2]
         
-        # Perhitungan lebar/tinggi tanpa padding atau border
-        label_width, label_height = label_size.width(), label_size.height()
+        # Perhitungan lebar/tinggi
+        target_width, target_height = widget_size.width(), widget_size.height()
         
-        if label_width <= 0 or label_height <= 0:
+        if target_width <= 0 or target_height <= 0:
             return
             
-        scale_x = label_width / frame_width
-        scale_y = label_height / frame_height
-        scale = min(scale_x, scale_y)
-        
-        new_width = int(frame_width * scale)
-        new_height = int(frame_height * scale)
-        
-        resized_frame = cv2.resize(rgb_frame, (new_width, new_height), interpolation=cv2.INTER_AREA)
-        
+        # Convert to QImage first
         from PyQt5.QtGui import QImage, QPixmap
-        h, w, ch = resized_frame.shape
+        h, w, ch = rgb_frame.shape
         bytes_per_line = ch * w
-        qt_image = QImage(resized_frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
+        qt_image = QImage(rgb_frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
         pixmap = QPixmap.fromImage(qt_image)
         
-        # Scaling the pixmap to fill the label completely
-        self.video_label.setPixmap(pixmap.scaled(label_size, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        # Scale pixmap to fit widget while maintaining aspect ratio
+        # Dalam mode compare, gunakan ukuran yang dipaksa sama
+        scaled_pixmap = pixmap.scaled(widget_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self.video_label.setPixmap(scaled_pixmap)
         
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -287,3 +292,30 @@ class MediaPlayer(QWidget):
                 'is_playing': self.is_playing
             }
         return {'is_video': False}
+    
+    def set_compare_mode(self, is_comparing):
+        """Set apakah media player dalam mode compare."""
+        self.is_comparing = is_comparing
+        if self.current_frame is not None:
+            self.display_frame(self.current_frame)
+    
+    def get_scaled_size(self, frame_size, container_size):
+        """Calculate scaled size while maintaining aspect ratio."""
+        frame_width, frame_height = frame_size
+        container_width, container_height = container_size
+        
+        # Calculate aspect ratios
+        frame_aspect = frame_width / frame_height
+        container_aspect = container_width / container_height
+        
+        # Scale to fit within container while maintaining aspect ratio
+        if frame_aspect > container_aspect:
+            # Frame is wider, scale by width
+            scaled_width = container_width
+            scaled_height = int(container_width / frame_aspect)
+        else:
+            # Frame is taller, scale by height
+            scaled_height = container_height
+            scaled_width = int(container_height * frame_aspect)
+            
+        return scaled_width, scaled_height

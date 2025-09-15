@@ -189,7 +189,7 @@ class MainWindow(QMainWindow):
         self.media_container = QWidget()
         self.media_container_layout = QHBoxLayout(self.media_container)
         self.media_container_layout.setContentsMargins(0, 0, 0, 0)
-        self.media_container_layout.setSpacing(0)
+        self.media_container_layout.setSpacing(2)  # Small spacing between players
 
         self.media_player = MediaPlayer()
         self.media_container_layout.addWidget(self.media_player)
@@ -592,17 +592,59 @@ class MainWindow(QMainWindow):
         self.compare_action.setChecked(self.compare_mode)
         self.controls.set_compare_state(self.compare_mode)
 
+        # Set compare mode untuk kedua media player
+        self.media_player.set_compare_mode(self.compare_mode)
+        self.media_player_2.set_compare_mode(self.compare_mode)
+
         if self.compare_mode:
             self.media_player_2.show()
+            # Force equal sizing immediately
+            QTimer.singleShot(10, self.ensure_equal_video_sizes)
             self.status_bar.showMessage("Compare mode enabled.")
         else:
             self.media_player_2.hide()
             self.media_player_2.clear_media()
+            # Reset sizing for single player
+            self.media_player.setMinimumWidth(0)
+            self.media_player.setMaximumWidth(16777215)
             self.reset_playlist_indicators()
             current_file_A = self.media_player.get_current_file_path()
             if current_file_A:
                 self.update_playlist_item_indicator(current_file_A, "A")
             self.status_bar.showMessage("Single view mode enabled.")
+
+    def set_compare_mode_for_players(self, enabled):
+        """Set mode compare untuk kedua media player."""
+        self.media_player.set_compare_mode(enabled)
+        self.media_player_2.set_compare_mode(enabled)
+
+    def ensure_equal_video_sizes(self):
+        """Pastikan kedua video player memiliki ukuran yang sama dalam mode compare."""
+        if self.compare_mode:
+            # Force equal width for both players
+            container_width = self.media_container.width()
+            player_width = (container_width - 10) // 2  # 10 adalah total spacing
+            
+            # Set fixed widths to ensure consistency
+            self.media_player.setFixedWidth(player_width)
+            self.media_player_2.setFixedWidth(player_width)
+            
+            # Set ukuran video label yang sama untuk kedua player
+            self.media_player.video_label.setFixedSize(player_width, self.media_container.height() - 20)
+            self.media_player_2.video_label.setFixedSize(player_width, self.media_container.height() - 20)
+            
+            # Update both players to display frames with same scaling
+            if self.media_player.current_frame is not None:
+                self.media_player.display_frame(self.media_player.current_frame)
+            if self.media_player_2.current_frame is not None:
+                self.media_player_2.display_frame(self.media_player_2.current_frame)
+
+    def resizeEvent(self, event):
+        """Handle window resize and maintain equal video sizes."""
+        super().resizeEvent(event)
+        if self.compare_mode:
+            # Delay to ensure layout is updated
+            QTimer.singleShot(50, self.ensure_equal_video_sizes)
 
     def reset_playlist_indicators(self):
         for i in range(self.playlist_widget.count()):
