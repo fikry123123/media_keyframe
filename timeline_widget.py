@@ -95,11 +95,12 @@ class TimelineWidget(QWidget):
                 frames = int((current_seconds - int(current_seconds)) * self.fps)
                 frame_text = f"{minutes:02d}:{seconds:02d}.{frames:02d}"
             else:
-                frame_text = str(self.current_position)
+                # Tampilkan nomor frame mulai dari 1 (bukan 0)
+                frame_text = str(self.current_position + 1)
 
             text_rect = painter.fontMetrics().boundingRect(frame_text)
             
-            # Atur posisi teks di atas garis
+            # Atur posisi teks di atas garis (terpusat di atas playhead '|')
             text_x = int(marker_x) - text_rect.width() // 2
             text_y = text_rect.height() + 2
             
