@@ -128,6 +128,10 @@ class MediaPlayer(QWidget):
                 target_width = parent_width // 2 - 5  # Minus spacing
                 widget_size = self.size()
                 widget_size.setWidth(target_width)
+        else:
+            # Dalam mode single view, gunakan ukuran penuh dari container
+            if self.parent():
+                widget_size = self.parent().size()
         
         # Jika ukuran widget belum diinisialisasi, gunakan ukuran default
         if widget_size.width() <= 0 or widget_size.height() <= 0:
@@ -149,7 +153,6 @@ class MediaPlayer(QWidget):
         pixmap = QPixmap.fromImage(qt_image)
         
         # Scale pixmap to fit widget while maintaining aspect ratio
-        # Dalam mode compare, gunakan ukuran yang dipaksa sama
         scaled_pixmap = pixmap.scaled(widget_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         self.video_label.setPixmap(scaled_pixmap)
         

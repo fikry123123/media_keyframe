@@ -604,9 +604,32 @@ class MainWindow(QMainWindow):
         else:
             self.media_player_2.hide()
             self.media_player_2.clear_media()
-            # Reset sizing for single player
+            # Reset sizing for single player - remove all size constraints completely
             self.media_player.setMinimumWidth(0)
             self.media_player.setMaximumWidth(16777215)
+            self.media_player.setMinimumHeight(0)
+            self.media_player.setMaximumHeight(16777215)
+            
+            # Clear any fixed sizing
+            self.media_player.setFixedWidth(16777215)
+            self.media_player.setFixedHeight(16777215)
+            
+            # Reset video label size constraints completely
+            self.media_player.video_label.setMinimumSize(0, 0)
+            self.media_player.video_label.setMaximumSize(16777215, 16777215)
+            self.media_player.video_label.setFixedSize(16777215, 16777215)
+            
+            # Force widget to take full container space
+            self.media_player.setSizePolicy(self.media_player.sizePolicy().Expanding, self.media_player.sizePolicy().Expanding)
+            
+            # Update layout to ensure proper sizing
+            self.media_container_layout.invalidate()
+            self.media_container.updateGeometry()
+            
+            # Force re-display with proper sizing
+            if self.media_player.current_frame is not None:
+                QTimer.singleShot(100, lambda: self.media_player.display_frame(self.media_player.current_frame))
+                
             self.reset_playlist_indicators()
             current_file_A = self.media_player.get_current_file_path()
             if current_file_A:
