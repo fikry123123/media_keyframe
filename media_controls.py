@@ -14,17 +14,18 @@ class MediaControls(QWidget):
         layout.setContentsMargins(10, 5, 10, 5)
         layout.setSpacing(10)
         
+        # PERBAIKAN: Gaya tombol sedikit disederhanakan
         button_style = """
             QPushButton {
                 background-color: #444444;
                 color: #ffffff;
-                border: 2px solid #666666;
+                border: 1px solid #666666;
                 border-radius: 6px;
-                padding: 8px 12px;
+                padding: 6px 10px;
                 font-size: 16px;
                 font-weight: bold;
-                min-width: 70px;
-                min-height: 35px;
+                min-width: 60px;
+                min-height: 30px;
             }
             QPushButton:hover {
                 background-color: #555555;
@@ -41,7 +42,11 @@ class MediaControls(QWidget):
             }
         """
         
-        self.prev_button = QPushButton("⏮")
+        # PERBAIKAN: Tambahkan stretch di kiri untuk mendorong tombol ke tengah
+        layout.addStretch()
+        
+        # PERBAIKAN: Ikon tombol disederhanakan
+        self.prev_button = QPushButton("<<")
         self.prev_button.setStyleSheet(button_style)
         self.prev_button.setToolTip("Previous Frame (Left Arrow)")
         layout.addWidget(self.prev_button)
@@ -56,7 +61,7 @@ class MediaControls(QWidget):
         self.stop_button.setToolTip("Stop")
         layout.addWidget(self.stop_button)
         
-        self.next_button = QPushButton("⏭")
+        self.next_button = QPushButton(">>")
         self.next_button.setStyleSheet(button_style)
         self.next_button.setToolTip("Next Frame (Right Arrow)")
         layout.addWidget(self.next_button)
@@ -67,6 +72,7 @@ class MediaControls(QWidget):
         self.compare_button.clicked.connect(self.compare_toggled.emit)
         layout.addWidget(self.compare_button)
         
+        # PERBAIKAN: Tambahkan stretch di kanan untuk menjaga tombol tetap di tengah
         layout.addStretch()
 
     def set_play_state(self, is_playing):
