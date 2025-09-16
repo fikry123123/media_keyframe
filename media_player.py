@@ -56,8 +56,11 @@ class MediaPlayer(QWidget):
                     self.video_capture = cap
                     self.is_video = True
                     self.current_frame = frame
-                    self.total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                    # PERBAIKAN: set displayed_frame_source saat load
+                    self.displayed_frame_source = frame
+                    self.total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
                     self.fps = cap.get(cv2.CAP_PROP_FPS) or 30
+                    # POS_FRAMES after read gives next frame index, so subtract 1
                     self.current_frame_index = int(cap.get(cv2.CAP_PROP_POS_FRAMES)) - 1
                     self.display_frame(frame)
                     self.frameIndexChanged.emit(self.current_frame_index, self.total_frames)
@@ -74,6 +77,7 @@ class MediaPlayer(QWidget):
             if frame is not None:
                 self.is_video = False
                 self.current_frame = frame
+                self.displayed_frame_source = frame  # PERBAIKAN
                 self.total_frames = 1
                 self.current_frame_index = 0
                 self.display_frame(frame)
@@ -138,6 +142,7 @@ class MediaPlayer(QWidget):
             ret, frame = self.video_capture.read()
             if ret:
                 self.current_frame = frame
+                self.displayed_frame_source = frame  # PERBAIKAN
                 self.current_frame_index = int(self.video_capture.get(cv2.CAP_PROP_POS_FRAMES)) - 1
                 self.display_frame(frame)
                 self.frameIndexChanged.emit(self.current_frame_index, self.total_frames)
@@ -151,6 +156,7 @@ class MediaPlayer(QWidget):
             ret, frame = self.video_capture.read()
             if ret:
                 self.current_frame = frame
+                self.displayed_frame_source = frame  # PERBAIKAN
                 self.current_frame_index = int(self.video_capture.get(cv2.CAP_PROP_POS_FRAMES)) - 1
                 self.display_frame(frame)
                 self.frameIndexChanged.emit(self.current_frame_index, self.total_frames)
@@ -161,6 +167,7 @@ class MediaPlayer(QWidget):
             ret, frame = self.video_capture.read()
             if ret:
                 self.current_frame = frame
+                self.displayed_frame_source = frame  # PERBAIKAN
                 self.current_frame_index = int(self.video_capture.get(cv2.CAP_PROP_POS_FRAMES)) - 1
                 self.display_frame(frame)
                 self.frameIndexChanged.emit(self.current_frame_index, self.total_frames)
@@ -173,6 +180,7 @@ class MediaPlayer(QWidget):
             ret, frame = self.video_capture.read()
             if ret:
                 self.current_frame = frame
+                self.displayed_frame_source = frame  # PERBAIKAN
                 self.current_frame_index = int(self.video_capture.get(cv2.CAP_PROP_POS_FRAMES)) - 1
                 self.display_frame(frame)
                 self.frameIndexChanged.emit(self.current_frame_index, self.total_frames)
@@ -182,6 +190,7 @@ class MediaPlayer(QWidget):
         ret, frame = self.video_capture.read()
         if ret:
             self.current_frame = frame
+            self.displayed_frame_source = frame  # PERBAIKAN
             self.current_frame_index = int(self.video_capture.get(cv2.CAP_PROP_POS_FRAMES)) - 1
             self.display_frame(frame)
             self.frameIndexChanged.emit(self.current_frame_index, self.total_frames)
@@ -211,5 +220,6 @@ class MediaPlayer(QWidget):
         self.is_video = False
         self.video_label.setText("Load media file to start...")
         self.video_label.setPixmap(QPixmap())
+        # Emit index -1 to indicate no media
         self.frameIndexChanged.emit(-1, 0)
         self.fpsChanged.emit(0.0)

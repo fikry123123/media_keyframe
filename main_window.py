@@ -241,7 +241,8 @@ class MainWindow(QMainWindow):
                 self.sequence_timer.stop()
                 self.controls.set_play_state(False)
             else:
-                fps = self.media_player_A_fps
+                # fallback FPS untuk image sequence jika tidak tersedia
+                fps = self.media_player_A_fps if self.media_player_A_fps > 0 else 24
                 interval = int(1000 / fps) if fps > 0 else 41
                 self.sequence_timer.start(interval)
                 self.controls.set_play_state(True)
@@ -297,13 +298,27 @@ class MainWindow(QMainWindow):
                 self.media_player_2.seek_to_position(position)
 
     def update_frame_counter(self, current_frame, total_frames=None):
+        # Jika dipanggil dari media_player saat clear_media -> current_frame bisa -1
         active_player = self.media_player
         if total_frames is None and active_player.has_media():
             total_frames = active_player.total_frames
         elif not active_player.has_media():
              total_frames = 0
              current_frame = -1
-        self.timeline.set_marks(self.marks)
+
+        # Jika tidak ada media sama sekali
+        if current_frame is None or current_frame < 0 or total_frames <= 0:
+            self.frame_counter_label.setText("No Media Loaded")
+            # beri timeline nilai aman
+            self.timeline.set_timecode_mode(False)
+            self.timeline.set_fps(0)
+            self.timeline.set_duration(0)
+            self.timeline.set_position(0)
+            if self.compare_mode:
+                self.update_composite_view()
+            return
+
+        # Timecode mode (hanya jika fps valid)
         fps_for_timecode = self.media_player_A_fps
         if self.show_timecode and fps_for_timecode > 0 and total_frames > 0:
             total_seconds_val = total_frames / fps_for_timecode
@@ -315,11 +330,18 @@ class MainWindow(QMainWindow):
             self.frame_counter_label.setText(f"Time: {current_minutes:02d}:{current_seconds:02d}.{current_frames_rem:02d} / {total_minutes:02d}:{total_seconds_part:02d}.{total_frames_part:02d}")
             self.timeline.set_timecode_mode(True)
         else:
+            # tampilkan frame-based counter
             self.frame_counter_label.setText(f"Frame: {current_frame + 1} / {total_frames}")
             self.timeline.set_timecode_mode(False)
-        self.timeline.set_fps(fps_for_timecode)
+
+        # update timeline data
+        self.timeline.set_fps(fps_for_timecode if fps_for_timecode > 0 else 0)
         self.timeline.set_duration(total_frames)
-        self.timeline.set_position(current_frame)
+        # pastikan posisi masuk rentang valid
+        pos = int(max(0, min(current_frame, total_frames - 1)))
+        self.timeline.set_position(pos)
+        self.timeline.set_marks(self.marks)
+
         if self.compare_mode:
             self.update_composite_view()
 
@@ -417,9 +439,13 @@ class MainWindow(QMainWindow):
         # Logika untuk drop dari playlist internal
         if event.source() == self.playlist_widget:
             item = self.playlist_widget.currentItem()
-            if not item: event.accept(); return
+            if not item:
+                event.ignore()
+                return
             file_path = item.data(Qt.UserRole)
-            if not file_path: event.accept(); return
+            if not file_path:
+                event.ignore()
+                return
             if self.compare_mode:
                 if not self.media_player.has_media(): self.load_single_file(file_path)
                 else: self.load_media_into_player_b(file_path)
@@ -562,11 +588,15 @@ class MainWindow(QMainWindow):
         return placeholder
 
     def update_composite_view(self):
-        if not self.compare_mode: return
+        if not self.compare_mode:
+            return
+
         frame_a = self.media_player.current_frame
         frame_b = self.media_player_2.current_frame
+
+        # placeholder jika dua-duanya None
         if frame_a is None and frame_b is None:
-            container_size = self.media_player.size()
+            container_size = self.media_container.size()
             h, w = container_size.height(), container_size.width() // 2
             if h <= 10 or w <= 10:
                 self.media_player.video_label.setPixmap(QPixmap())
@@ -575,25 +605,43 @@ class MainWindow(QMainWindow):
             placeholder_a = self.create_placeholder_frame("Load Media for A", w, h)
             placeholder_b = self.create_placeholder_frame("Load Media for B", w, h)
             composite_frame = cv2.hconcat([placeholder_a, placeholder_b])
-            self.media_player.display_frame(composite_frame)
-            return
-        ref_h = frame_a.shape[0] if frame_a is not None else frame_b.shape[0]
-        if frame_a is None:
-            ref_w = frame_b.shape[1]
-            frame_a = self.create_placeholder_frame("Load Media for A", ref_w, ref_h)
-        if frame_b is None:
-            ref_w = frame_a.shape[1]
-            frame_b = self.create_placeholder_frame("Load Media for B", ref_w, ref_h)
-        h_a, _, _ = frame_a.shape
-        h_b, w_b, _ = frame_b.shape
-        if h_a != h_b:
-            scale = h_a / h_b
-            new_w_b = int(w_b * scale)
-            interpolation = cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR
-            frame_b_resized = cv2.resize(frame_b, (new_w_b, h_a), interpolation=interpolation)
         else:
-            frame_b_resized = frame_b
-        composite_frame = cv2.hconcat([frame_a, frame_b_resized])
+            # isi placeholder bila salah satu None
+            if frame_a is None:
+                ref_h, ref_w = frame_b.shape[:2]
+                frame_a = self.create_placeholder_frame("Load Media for A", ref_w, ref_h)
+            if frame_b is None:
+                ref_h, ref_w = frame_a.shape[:2]
+                frame_b = self.create_placeholder_frame("Load Media for B", ref_w, ref_h)
+
+            # resize keduanya ke tinggi terkecil agar sejajar
+            h_a, w_a, _ = frame_a.shape
+            h_b, w_b, _ = frame_b.shape
+            target_h = min(h_a, h_b)
+            if target_h <= 0:
+                return
+
+            new_w_a = int(w_a * (target_h / h_a))
+            new_w_b = int(w_b * (target_h / h_b))
+            frame_a_resized = cv2.resize(frame_a, (new_w_a, target_h), interpolation=cv2.INTER_AREA)
+            frame_b_resized = cv2.resize(frame_b, (new_w_b, target_h), interpolation=cv2.INTER_AREA)
+
+            composite_frame = cv2.hconcat([frame_a_resized, frame_b_resized])
+
+        # --- PERBAIKAN: scale composite agar fit container Qt ---
+        # scale composite agar fit container Qt dengan aspect ratio terjaga
+        container_size = self.media_container.size()
+        max_w, max_h = container_size.width(), container_size.height()
+        if composite_frame.shape[1] > max_w or composite_frame.shape[0] > max_h:
+            scale = min(max_w / composite_frame.shape[1],
+                        max_h / composite_frame.shape[0])
+            new_w = int(composite_frame.shape[1] * scale)
+            new_h = int(composite_frame.shape[0] * scale)
+            composite_frame = cv2.resize(
+                composite_frame, (new_w, new_h), interpolation=cv2.INTER_AREA
+            )
+
+
         self.media_player.display_frame(composite_frame)
 
     def reset_playlist_indicators(self):
