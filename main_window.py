@@ -65,6 +65,12 @@ class MainWindow(QMainWindow):
                 background-color: #404040;
                 color: #888888;
             }
+            QSplitter::handle {
+                background-color: #444444;
+            }
+            QSplitter::handle:horizontal {
+                width: 2px;
+            }
         """)
 
         self.image_sequence_files = []
@@ -76,6 +82,9 @@ class MainWindow(QMainWindow):
         self.media_player_A_fps = 0.0
         self.media_player_B_fps = 0.0
         self.show_timecode = False
+        
+        # PERBAIKAN: Variabel untuk menyimpan ukuran splitter
+        self.splitter_sizes = []
 
         self.setAcceptDrops(True)
 
@@ -84,9 +93,14 @@ class MainWindow(QMainWindow):
     def setup_ui(self):
             central_widget = QWidget()
             self.setCentralWidget(central_widget)
+            # Gunakan QHBoxLayout hanya sebagai container untuk splitter
             main_layout = QHBoxLayout(central_widget)
             main_layout.setContentsMargins(0, 0, 0, 0)
             main_layout.setSpacing(0) 
+
+            # --- PERBAIKAN: Menggunakan QSplitter sebagai layout utama ---
+            self.splitter = QSplitter(Qt.Horizontal)
+            self.splitter.setChildrenCollapsible(False) # Mencegah widget hilang saat splitter ditarik ke ujung
 
             self.playlist_widget_container = QWidget()
             playlist_layout = QVBoxLayout(self.playlist_widget_container)
@@ -123,11 +137,19 @@ class MainWindow(QMainWindow):
             self.controls.set_compare_state(self.compare_mode)
             media_layout.addWidget(self.controls)
             
-            main_layout.addWidget(self.playlist_widget_container)
-            main_layout.addWidget(media_widget)
+            # Tambahkan widget ke splitter, bukan ke layout langsung
+            self.splitter.addWidget(self.playlist_widget_container)
+            self.splitter.addWidget(media_widget)
 
-            main_layout.setStretch(0, 1)
-            main_layout.setStretch(1, 4)
+            # Atur ukuran awal splitter untuk meniru rasio 1:4
+            self.splitter.setSizes([240, 960])
+            
+            # Tambahkan splitter ke layout utama
+            main_layout.addWidget(self.splitter)
+
+            # --- PERBAIKAN: Hapus setStretch karena sudah diatur oleh splitter ---
+            # main_layout.setStretch(0, 1) # Tidak diperlukan lagi
+            # main_layout.setStretch(1, 4) # Tidak diperlukan lagi
             
             self.connect_signals()
             self.create_menu_bar()
@@ -241,7 +263,8 @@ class MainWindow(QMainWindow):
                 self.sequence_timer.stop()
                 self.controls.set_play_state(False)
             else:
-                fps = self.media_player_A_fps
+                # fallback FPS untuk image sequence jika tidak tersedia
+                fps = self.media_player_A_fps if self.media_player_A_fps > 0 else 24
                 interval = int(1000 / fps) if fps > 0 else 41
                 self.sequence_timer.start(interval)
                 self.controls.set_play_state(True)
@@ -303,7 +326,17 @@ class MainWindow(QMainWindow):
         elif not active_player.has_media():
              total_frames = 0
              current_frame = -1
-        self.timeline.set_marks(self.marks)
+
+        if current_frame is None or current_frame < 0 or total_frames <= 0:
+            self.frame_counter_label.setText("No Media Loaded")
+            self.timeline.set_timecode_mode(False)
+            self.timeline.set_fps(0)
+            self.timeline.set_duration(0)
+            self.timeline.set_position(0)
+            if self.compare_mode:
+                self.update_composite_view()
+            return
+
         fps_for_timecode = self.media_player_A_fps
         if self.show_timecode and fps_for_timecode > 0 and total_frames > 0:
             total_seconds_val = total_frames / fps_for_timecode
@@ -317,9 +350,13 @@ class MainWindow(QMainWindow):
         else:
             self.frame_counter_label.setText(f"Frame: {current_frame + 1} / {total_frames}")
             self.timeline.set_timecode_mode(False)
-        self.timeline.set_fps(fps_for_timecode)
+
+        self.timeline.set_fps(fps_for_timecode if fps_for_timecode > 0 else 0)
         self.timeline.set_duration(total_frames)
-        self.timeline.set_position(current_frame)
+        pos = int(max(0, min(current_frame, total_frames - 1)))
+        self.timeline.set_position(pos)
+        self.timeline.set_marks(self.marks)
+
         if self.compare_mode:
             self.update_composite_view()
 
@@ -334,7 +371,6 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence(Qt.Key_F), self).activated.connect(self.toggle_mark)
         QShortcut(QKeySequence(Qt.Key_BracketLeft), self).activated.connect(self.jump_to_previous_mark)
         QShortcut(QKeySequence(Qt.Key_BracketRight), self).activated.connect(self.jump_to_next_mark)
-        # Peningkatan: Navigasi playlist dengan keyboard
         QShortcut(QKeySequence("Ctrl+Up"), self).activated.connect(self.play_previous_playlist_item)
         QShortcut(QKeySequence("Ctrl+Down"), self).activated.connect(self.play_next_playlist_item)
 
@@ -383,12 +419,18 @@ class MainWindow(QMainWindow):
         self.update_frame_counter(self.media_player.current_frame_index)
 
     def toggle_playlist_panel(self):
-            if self.playlist_widget_container.isVisible():
-                self.playlist_widget_container.hide()
-                self.hide_playlist_action.setText("Show Playlist Panel")
-            else:
-                self.playlist_widget_container.show()
-                self.hide_playlist_action.setText("Hide Playlist Panel")
+        # --- PERBAIKAN: Logika baru menggunakan QSplitter ---
+        if self.playlist_widget_container.isVisible():
+            # Simpan ukuran splitter sebelum menyembunyikan
+            self.splitter_sizes = self.splitter.sizes()
+            self.playlist_widget_container.hide()
+            self.hide_playlist_action.setText("Show Playlist Panel")
+        else:
+            self.playlist_widget_container.show()
+            # Kembalikan ukuran splitter jika ada yang tersimpan
+            if self.splitter_sizes:
+                self.splitter.setSizes(self.splitter_sizes)
+            self.hide_playlist_action.setText("Hide Playlist Panel")
 
     def go_to_first_frame(self): self.seek_to_position(0)
 
@@ -414,12 +456,15 @@ class MainWindow(QMainWindow):
         else: event.ignore()
 
     def dropEvent(self, event: QDropEvent):
-        # Logika untuk drop dari playlist internal
         if event.source() == self.playlist_widget:
             item = self.playlist_widget.currentItem()
-            if not item: event.accept(); return
+            if not item:
+                event.ignore()
+                return
             file_path = item.data(Qt.UserRole)
-            if not file_path: event.accept(); return
+            if not file_path:
+                event.ignore()
+                return
             if self.compare_mode:
                 if not self.media_player.has_media(): self.load_single_file(file_path)
                 else: self.load_media_into_player_b(file_path)
@@ -427,7 +472,6 @@ class MainWindow(QMainWindow):
             event.accept()
             return
 
-        # Logika untuk drop dari luar aplikasi (File Explorer, dll)
         if event.mimeData().hasUrls():
             files = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
             if files:
@@ -456,11 +500,10 @@ class MainWindow(QMainWindow):
         self.media_player.clear_media()
         self.media_player_2.clear_media()
         if self.compare_mode: self.update_composite_view()
-        # Aktifkan kembali semua kontrol yang mungkin dinonaktifkan
         self.compare_action.setEnabled(True)
         self.controls.compare_button.setEnabled(True)
         self.open_folder_action.setEnabled(True)
-        self.image_sequence_files = [] # Pastikan mode sequence juga direset
+        self.image_sequence_files = [] 
         self.status_bar.showMessage("Playlist cleared")
 
     def load_from_playlist(self, item):
@@ -470,7 +513,7 @@ class MainWindow(QMainWindow):
             self.load_single_file(file_path)
 
     def load_single_file(self, file_path):
-        self.image_sequence_files = [] # Reset mode sequence
+        self.image_sequence_files = [] 
         self.marks = []
         success = self.media_player.load_media(file_path)
         if success:
@@ -478,7 +521,6 @@ class MainWindow(QMainWindow):
             self.reset_playlist_indicators()
             self.update_playlist_item_indicator(file_path, "A")
             self.timeline.set_marks(self.marks)
-            # Aktifkan kembali kontrol compare
             self.compare_action.setEnabled(True)
             self.controls.compare_button.setEnabled(True)
         else:
@@ -534,12 +576,12 @@ class MainWindow(QMainWindow):
         self.controls.set_compare_state(self.compare_mode)
         if self.compare_mode:
             self.status_bar.showMessage("Compare mode enabled.")
-            self.open_folder_action.setEnabled(False) # Nonaktifkan menu image sequence
+            self.open_folder_action.setEnabled(False)
             self.update_composite_view()
         else:
             self.media_player_2.clear_media()
             self.status_bar.showMessage("Single view mode enabled.")
-            self.open_folder_action.setEnabled(True) # Aktifkan kembali menu image sequence
+            self.open_folder_action.setEnabled(True)
             if self.media_player.current_frame is not None:
                 self.media_player.display_frame(self.media_player.current_frame)
             else:
@@ -562,11 +604,14 @@ class MainWindow(QMainWindow):
         return placeholder
 
     def update_composite_view(self):
-        if not self.compare_mode: return
+        if not self.compare_mode:
+            return
+
         frame_a = self.media_player.current_frame
         frame_b = self.media_player_2.current_frame
+
         if frame_a is None and frame_b is None:
-            container_size = self.media_player.size()
+            container_size = self.media_container.size()
             h, w = container_size.height(), container_size.width() // 2
             if h <= 10 or w <= 10:
                 self.media_player.video_label.setPixmap(QPixmap())
@@ -575,25 +620,38 @@ class MainWindow(QMainWindow):
             placeholder_a = self.create_placeholder_frame("Load Media for A", w, h)
             placeholder_b = self.create_placeholder_frame("Load Media for B", w, h)
             composite_frame = cv2.hconcat([placeholder_a, placeholder_b])
-            self.media_player.display_frame(composite_frame)
-            return
-        ref_h = frame_a.shape[0] if frame_a is not None else frame_b.shape[0]
-        if frame_a is None:
-            ref_w = frame_b.shape[1]
-            frame_a = self.create_placeholder_frame("Load Media for A", ref_w, ref_h)
-        if frame_b is None:
-            ref_w = frame_a.shape[1]
-            frame_b = self.create_placeholder_frame("Load Media for B", ref_w, ref_h)
-        h_a, _, _ = frame_a.shape
-        h_b, w_b, _ = frame_b.shape
-        if h_a != h_b:
-            scale = h_a / h_b
-            new_w_b = int(w_b * scale)
-            interpolation = cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR
-            frame_b_resized = cv2.resize(frame_b, (new_w_b, h_a), interpolation=interpolation)
         else:
-            frame_b_resized = frame_b
-        composite_frame = cv2.hconcat([frame_a, frame_b_resized])
+            if frame_a is None:
+                ref_h, ref_w = frame_b.shape[:2]
+                frame_a = self.create_placeholder_frame("Load Media for A", ref_w, ref_h)
+            if frame_b is None:
+                ref_h, ref_w = frame_a.shape[:2]
+                frame_b = self.create_placeholder_frame("Load Media for B", ref_w, ref_h)
+
+            h_a, w_a, _ = frame_a.shape
+            h_b, w_b, _ = frame_b.shape
+            target_h = min(h_a, h_b)
+            if target_h <= 0:
+                return
+
+            new_w_a = int(w_a * (target_h / h_a))
+            new_w_b = int(w_b * (target_h / h_b))
+            frame_a_resized = cv2.resize(frame_a, (new_w_a, target_h), interpolation=cv2.INTER_AREA)
+            frame_b_resized = cv2.resize(frame_b, (new_w_b, target_h), interpolation=cv2.INTER_AREA)
+
+            composite_frame = cv2.hconcat([frame_a_resized, frame_b_resized])
+
+        container_size = self.media_container.size()
+        max_w, max_h = container_size.width(), container_size.height()
+        if composite_frame.shape[1] > max_w or composite_frame.shape[0] > max_h:
+            scale = min(max_w / composite_frame.shape[1],
+                        max_h / composite_frame.shape[0])
+            new_w = int(composite_frame.shape[1] * scale)
+            new_h = int(composite_frame.shape[0] * scale)
+            composite_frame = cv2.resize(
+                composite_frame, (new_w, new_h), interpolation=cv2.INTER_AREA
+            )
+
         self.media_player.display_frame(composite_frame)
 
     def reset_playlist_indicators(self):
