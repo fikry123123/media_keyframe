@@ -1,4 +1,4 @@
-from PyQt5.QtWidgets import QWidget, QHBoxLayout, QPushButton, QSlider, QLabel
+from PyQt5.QtWidgets import QWidget, QHBoxLayout, QPushButton
 from PyQt5.QtCore import Qt, pyqtSignal
 
 class MediaControls(QWidget):
@@ -12,7 +12,7 @@ class MediaControls(QWidget):
     def setup_ui(self):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 5, 10, 5)
-        layout.setSpacing(10)
+        layout.setSpacing(5)
         
         button_style = """
             QPushButton {
@@ -23,7 +23,7 @@ class MediaControls(QWidget):
                 padding: 6px 10px;
                 font-size: 16px;
                 font-weight: bold;
-                min-width: 60px;
+                min-width: 40px;
                 min-height: 30px;
             }
             QPushButton:hover {
@@ -43,7 +43,12 @@ class MediaControls(QWidget):
         
         layout.addStretch()
         
-        self.prev_button = QPushButton("<<")
+        self.first_frame_button = QPushButton("⏮")
+        self.first_frame_button.setStyleSheet(button_style)
+        self.first_frame_button.setToolTip("Go to First Frame (Home)")
+        layout.addWidget(self.first_frame_button)
+
+        self.prev_button = QPushButton("⏴")
         self.prev_button.setStyleSheet(button_style)
         self.prev_button.setToolTip("Previous Frame (Left Arrow)")
         layout.addWidget(self.prev_button)
@@ -53,15 +58,22 @@ class MediaControls(QWidget):
         self.play_button.setToolTip("Play/Pause (Space)")
         layout.addWidget(self.play_button)
         
-        self.stop_button = QPushButton("⏹")
-        self.stop_button.setStyleSheet(button_style)
-        self.stop_button.setToolTip("Stop")
-        layout.addWidget(self.stop_button)
-        
-        self.next_button = QPushButton(">>")
+        self.next_button = QPushButton("⏵")
         self.next_button.setStyleSheet(button_style)
         self.next_button.setToolTip("Next Frame (Right Arrow)")
         layout.addWidget(self.next_button)
+
+        self.last_frame_button = QPushButton("⏭")
+        self.last_frame_button.setStyleSheet(button_style)
+        self.last_frame_button.setToolTip("Go to Last Frame (End)")
+        layout.addWidget(self.last_frame_button)
+        
+        layout.addSpacing(20)
+
+        self.playback_mode_button = QPushButton("→")
+        self.playback_mode_button.setStyleSheet(button_style)
+        self.playback_mode_button.setToolTip("Playback Mode: Normal (Stop at end)")
+        layout.addWidget(self.playback_mode_button)
 
         self.compare_button = QPushButton("Compare")
         self.compare_button.setStyleSheet(button_style)
@@ -86,3 +98,7 @@ class MediaControls(QWidget):
         else:
             self.compare_button.setText("Compare")
             self.compare_button.setToolTip("Switch to compare (side-by-side) view")
+            
+    def set_playback_mode_state(self, icon, tooltip):
+        self.playback_mode_button.setText(icon)
+        self.playback_mode_button.setToolTip(tooltip)

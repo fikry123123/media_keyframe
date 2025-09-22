@@ -9,6 +9,7 @@ class MediaPlayer(QWidget):
     frameReady = pyqtSignal()
     playStateChanged = pyqtSignal(bool)
     fpsChanged = pyqtSignal(float)
+    playbackFinished = pyqtSignal()
     
     def __init__(self):
         super().__init__()
@@ -24,8 +25,6 @@ class MediaPlayer(QWidget):
         self.video_timer.timeout.connect(self.update_video_frame)
         self.fps = 30
         self.current_media_path = None
-        # PENAMBAHAN: Penanda untuk mengetahui jika video sudah selesai diputar
-        self.playback_finished = False
 
     def setup_ui(self):
         layout = QVBoxLayout(self)
@@ -123,12 +122,7 @@ class MediaPlayer(QWidget):
             self.video_timer.stop()
             self.is_playing = False
         else:
-            # PERUBAHAN: Cek apakah video sudah selesai sebelum memutar
-            if self.playback_finished:
-                # Jika ya, pindah ke frame 0 dan reset penanda
-                self.seek_to_position(0)
-                self.playback_finished = False
-
+            # PERUBAHAN: Logika untuk seek ke awal dipindahkan ke MainWindow
             if self.fps > 0:
                 interval = int(1000 / self.fps)
             else:
@@ -140,8 +134,6 @@ class MediaPlayer(QWidget):
     def stop(self):
         if self.video_timer.isActive(): self.video_timer.stop()
         self.is_playing = False
-        # PENAMBAHAN: Reset penanda saat video dihentikan manual
-        self.playback_finished = False
         if self.is_video and self.video_capture:
             self.video_capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
             ret, frame = self.video_capture.read()
@@ -181,8 +173,6 @@ class MediaPlayer(QWidget):
         if not self.is_video or not self.video_capture: return
         frame_index = int(position)
         if 0 <= frame_index < self.total_frames:
-            # PENAMBAHAN: Saat seeking, pastikan penanda di-reset
-            self.playback_finished = False
             self.video_capture.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
             ret, frame = self.video_capture.read()
             if ret:
@@ -202,11 +192,10 @@ class MediaPlayer(QWidget):
             self.display_frame(frame)
             self.frameIndexChanged.emit(self.current_frame_index, self.total_frames)
         else:
-            # PENAMBAHAN: Set penanda bahwa video sudah selesai
-            self.playback_finished = True
             self.video_timer.stop()
             self.is_playing = False
             self.playStateChanged.emit(False)
+            self.playbackFinished.emit()
             
     def closeEvent(self, event):
         if self.video_capture: self.video_capture.release()

@@ -2,6 +2,7 @@ import os
 import glob
 import cv2
 import numpy as np
+from enum import Enum, auto
 from PyQt5.QtWidgets import (QMainWindow, QVBoxLayout, QWidget, QMenuBar, QAction,
                             QFileDialog, QHBoxLayout, QStatusBar, QLabel, QSplitter,
                             QListWidget, QListWidgetItem, QPushButton, QShortcut)
@@ -10,6 +11,10 @@ from PyQt5.QtGui import QDragEnterEvent, QDropEvent, QKeySequence, QPixmap
 from media_player import MediaPlayer
 from media_controls import MediaControls
 from timeline_widget import TimelineWidget
+
+class PlaybackMode(Enum):
+    LOOP = auto()
+    PLAY_NEXT = auto()
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -78,6 +83,7 @@ class MainWindow(QMainWindow):
         self.playlist_items = []
         self.compare_mode = False
         self.marks = []
+        self.playback_mode = PlaybackMode.LOOP 
 
         self.media_player_A_fps = 0.0
         self.media_player_B_fps = 0.0
@@ -88,6 +94,8 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(True)
 
         self.setup_ui()
+        self.controls.set_playback_mode_state("🔁", "Playback Mode: Loop (Repeat Automatically)")
+
 
     def setup_ui(self):
             central_widget = QWidget()
@@ -192,19 +200,42 @@ class MainWindow(QMainWindow):
 
     def connect_signals(self):
         self.controls.play_button.clicked.connect(self.toggle_play)
-        self.controls.stop_button.clicked.connect(self.stop)
         self.controls.prev_button.clicked.connect(self.previous_frame)
         self.controls.next_button.clicked.connect(self.next_frame)
         self.controls.compare_toggled.connect(self.toggle_compare_mode_from_button)
+        
+        self.controls.first_frame_button.clicked.connect(self.go_to_first_frame)
+        self.controls.last_frame_button.clicked.connect(self.go_to_last_frame)
+        self.controls.playback_mode_button.clicked.connect(self.cycle_playback_mode)
+
         self.playlist_widget.model().rowsMoved.connect(self.sync_playlist_data)
         self.timeline.position_changed.connect(self.seek_to_position)
         self.timeline.display_mode_changed.connect(self.set_time_display_mode)
+        
         self.media_player.frameIndexChanged.connect(self.update_frame_counter)
         self.media_player.playStateChanged.connect(self.controls.set_play_state)
+        self.media_player.playbackFinished.connect(self.handle_playback_finished)
+        
         self.media_player_2.frameIndexChanged.connect(self.update_frame_counter)
         self.media_player_2.playStateChanged.connect(self.controls.set_play_state)
+        
         self.media_player.fpsChanged.connect(lambda fps: self.update_fps_display(fps, 'A'))
         self.media_player_2.fpsChanged.connect(lambda fps: self.update_fps_display(fps, 'B'))
+
+    def cycle_playback_mode(self):
+        if self.playback_mode == PlaybackMode.LOOP:
+            self.playback_mode = PlaybackMode.PLAY_NEXT
+            self.controls.set_playback_mode_state("⤵️", "Playback Mode: Play Next in Playlist")
+        else:
+            self.playback_mode = PlaybackMode.LOOP
+            self.controls.set_playback_mode_state("🔁", "Playback Mode: Loop (Repeat Automatically)")
+
+    def handle_playback_finished(self):
+        if self.playback_mode == PlaybackMode.LOOP:
+            self.seek_to_position(0)
+            QTimer.singleShot(50, self.toggle_play)
+        elif self.playback_mode == PlaybackMode.PLAY_NEXT:
+            self.play_next_playlist_item()
 
     def open_file(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Open Media File", "", "Media Files (*.mp4 *.avi *.mov *.mkv *.jpg *.jpeg *.png *.bmp *.tiff);;All Files (*)")
@@ -269,6 +300,7 @@ class MainWindow(QMainWindow):
         else:
             self.sequence_timer.stop()
             self.controls.set_play_state(False)
+            self.handle_playback_finished()
 
     def stop(self):
         if hasattr(self, 'sequence_timer') and self.sequence_timer.isActive():
@@ -354,8 +386,6 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence(Qt.Key_Right), self).activated.connect(self.next_frame)
         QShortcut(QKeySequence(Qt.Key_Home), self).activated.connect(self.go_to_first_frame)
         QShortcut(QKeySequence(Qt.Key_End), self).activated.connect(self.go_to_last_frame)
-        QShortcut(QKeySequence(Qt.Key_PageUp), self).activated.connect(self.jump_backward)
-        QShortcut(QKeySequence(Qt.Key_PageDown), self).activated.connect(self.jump_forward)
         QShortcut(QKeySequence(Qt.Key_F), self).activated.connect(self.toggle_mark)
         QShortcut(QKeySequence(Qt.Key_BracketLeft), self).activated.connect(self.jump_to_previous_mark)
         QShortcut(QKeySequence(Qt.Key_BracketRight), self).activated.connect(self.jump_to_next_mark)
@@ -374,13 +404,20 @@ class MainWindow(QMainWindow):
             self.load_from_playlist(item)
     
     def play_next_playlist_item(self):
-        if self.playlist_widget.count() == 0: return
+        if self.playlist_widget.count() <= 1 and self.playback_mode != PlaybackMode.PLAY_NEXT:
+            return
+        elif self.playlist_widget.count() <= 1 and self.playback_mode == PlaybackMode.PLAY_NEXT:
+            self.seek_to_position(0)
+            self.toggle_play()
+            return
+            
         current_row = self.playlist_widget.currentRow()
         next_row = (current_row + 1) % self.playlist_widget.count()
         item = self.playlist_widget.item(next_row)
         if item:
             self.playlist_widget.setCurrentItem(item)
             self.load_from_playlist(item)
+            QTimer.singleShot(100, self.toggle_play)
 
     def toggle_mark(self):
         current_frame = self.media_player.current_frame_index
@@ -417,20 +454,14 @@ class MainWindow(QMainWindow):
                 self.splitter.setSizes(self.splitter_sizes)
             self.hide_playlist_action.setText("Hide Playlist Panel")
 
-    def go_to_first_frame(self): self.seek_to_position(0)
+    def go_to_first_frame(self): 
+        self.seek_to_position(0)
 
     def go_to_last_frame(self):
-        total_frames = len(self.image_sequence_files) if self.image_sequence_files else (self.media_player.total_frames or 1)
-        self.seek_to_position(total_frames - 1)
-
-    def jump_backward(self, frames=10):
-        current = self.media_player.current_frame_index
-        self.seek_to_position(max(0, current - frames))
-
-    def jump_forward(self, frames=10):
-        current = self.media_player.current_frame_index
-        total = len(self.image_sequence_files) if self.image_sequence_files else self.media_player.total_frames
-        self.seek_to_position(min(total - 1, current + frames))
+        total_frames = len(self.image_sequence_files) if self.image_sequence_files else (self.media_player.total_frames or 0)
+        if total_frames > 0:
+            last_frame_index = total_frames - 1
+            self.seek_to_position(last_frame_index)
 
     def dragEnterEvent(self, event: QDragEnterEvent):
         if event.source() == self.playlist_widget:
@@ -555,6 +586,7 @@ class MainWindow(QMainWindow):
                 self.update_composite_view()
 
     def toggle_compare_mode(self, enabled):
+        self.controls.playback_mode_button.setEnabled(not enabled)
         if enabled == self.compare_mode: return
         self.compare_mode = enabled
         self.compare_action.setChecked(self.compare_mode)
