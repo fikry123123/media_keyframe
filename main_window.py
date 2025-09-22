@@ -83,7 +83,6 @@ class MainWindow(QMainWindow):
         self.media_player_B_fps = 0.0
         self.show_timecode = False
         
-        # PERBAIKAN: Variabel untuk menyimpan ukuran splitter
         self.splitter_sizes = []
 
         self.setAcceptDrops(True)
@@ -93,14 +92,12 @@ class MainWindow(QMainWindow):
     def setup_ui(self):
             central_widget = QWidget()
             self.setCentralWidget(central_widget)
-            # Gunakan QHBoxLayout hanya sebagai container untuk splitter
             main_layout = QHBoxLayout(central_widget)
             main_layout.setContentsMargins(0, 0, 0, 0)
             main_layout.setSpacing(0) 
 
-            # --- PERBAIKAN: Menggunakan QSplitter sebagai layout utama ---
             self.splitter = QSplitter(Qt.Horizontal)
-            self.splitter.setChildrenCollapsible(False) # Mencegah widget hilang saat splitter ditarik ke ujung
+            self.splitter.setChildrenCollapsible(False) 
 
             self.playlist_widget_container = QWidget()
             playlist_layout = QVBoxLayout(self.playlist_widget_container)
@@ -137,20 +134,13 @@ class MainWindow(QMainWindow):
             self.controls.set_compare_state(self.compare_mode)
             media_layout.addWidget(self.controls)
             
-            # Tambahkan widget ke splitter, bukan ke layout langsung
             self.splitter.addWidget(self.playlist_widget_container)
             self.splitter.addWidget(media_widget)
 
-            # Atur ukuran awal splitter untuk meniru rasio 1:4
             self.splitter.setSizes([240, 960])
             
-            # Tambahkan splitter ke layout utama
             main_layout.addWidget(self.splitter)
 
-            # --- PERBAIKAN: Hapus setStretch karena sudah diatur oleh splitter ---
-            # main_layout.setStretch(0, 1) # Tidak diperlukan lagi
-            # main_layout.setStretch(1, 4) # Tidak diperlukan lagi
-            
             self.connect_signals()
             self.create_menu_bar()
             self.create_status_bar()
@@ -250,7 +240,6 @@ class MainWindow(QMainWindow):
             self.timeline.set_position(index)
             self.update_frame_counter(index, len(self.image_sequence_files))
             self.status_bar.showMessage(f"Loaded sequence: {len(self.image_sequence_files)} frames")
-            # Nonaktifkan mode compare jika image sequence aktif
             self.compare_action.setEnabled(False)
             self.controls.compare_button.setEnabled(False)
 
@@ -263,7 +252,6 @@ class MainWindow(QMainWindow):
                 self.sequence_timer.stop()
                 self.controls.set_play_state(False)
             else:
-                # fallback FPS untuk image sequence jika tidak tersedia
                 fps = self.media_player_A_fps if self.media_player_A_fps > 0 else 24
                 interval = int(1000 / fps) if fps > 0 else 41
                 self.sequence_timer.start(interval)
@@ -419,15 +407,12 @@ class MainWindow(QMainWindow):
         self.update_frame_counter(self.media_player.current_frame_index)
 
     def toggle_playlist_panel(self):
-        # --- PERBAIKAN: Logika baru menggunakan QSplitter ---
         if self.playlist_widget_container.isVisible():
-            # Simpan ukuran splitter sebelum menyembunyikan
             self.splitter_sizes = self.splitter.sizes()
             self.playlist_widget_container.hide()
             self.hide_playlist_action.setText("Show Playlist Panel")
         else:
             self.playlist_widget_container.show()
-            # Kembalikan ukuran splitter jika ada yang tersimpan
             if self.splitter_sizes:
                 self.splitter.setSizes(self.splitter_sizes)
             self.hide_playlist_action.setText("Hide Playlist Panel")

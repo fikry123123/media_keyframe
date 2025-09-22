@@ -14,7 +14,6 @@ class MediaControls(QWidget):
         layout.setContentsMargins(10, 5, 10, 5)
         layout.setSpacing(10)
         
-        # PERBAIKAN: Gaya tombol sedikit disederhanakan
         button_style = """
             QPushButton {
                 background-color: #444444;
@@ -42,10 +41,8 @@ class MediaControls(QWidget):
             }
         """
         
-        # PERBAIKAN: Tambahkan stretch di kiri untuk mendorong tombol ke tengah
         layout.addStretch()
         
-        # PERBAIKAN: Ikon tombol disederhanakan
         self.prev_button = QPushButton("<<")
         self.prev_button.setStyleSheet(button_style)
         self.prev_button.setToolTip("Previous Frame (Left Arrow)")
@@ -72,7 +69,6 @@ class MediaControls(QWidget):
         self.compare_button.clicked.connect(self.compare_toggled.emit)
         layout.addWidget(self.compare_button)
         
-        # PERBAIKAN: Tambahkan stretch di kanan untuk menjaga tombol tetap di tengah
         layout.addStretch()
 
     def set_play_state(self, is_playing):
