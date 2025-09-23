@@ -207,12 +207,13 @@ class MainWindow(QMainWindow):
         self.media_container_layout.setContentsMargins(0,0,0,0)
         self.media_player = MediaPlayer()
         self.media_container_layout.addWidget(self.media_player)
-        self.media_player_2 = MediaPlayer()
+        self.media_player_2 = MediaPlayer(enable_audio=False)
         media_layout.addWidget(self.media_container, 1)
         self.timeline = TimelineWidget()
         media_layout.addWidget(self.timeline)
         self.controls = MediaControls()
         self.controls.set_compare_state(self.compare_mode)
+        self.controls.set_volume(self.media_player.volume())
         media_layout.addWidget(self.controls)
         self.splitter.addWidget(self.playlist_widget_container)
         self.splitter.addWidget(media_widget)
@@ -231,6 +232,7 @@ class MainWindow(QMainWindow):
         self.controls.first_frame_button.clicked.connect(self.go_to_first_frame)
         self.controls.last_frame_button.clicked.connect(self.go_to_last_frame)
         self.controls.playback_mode_button.clicked.connect(self.cycle_playback_mode)
+        self.controls.volume_changed.connect(self.handle_volume_change)
         self.timeline.position_changed.connect(self.seek_to_position)
         self.timeline.display_mode_changed.connect(self.set_time_display_mode)
         self.media_player.frameIndexChanged.connect(self.update_frame_counter)
@@ -372,7 +374,10 @@ class MainWindow(QMainWindow):
             self.set_playback_mode(PlaybackMode.PLAY_ONCE)
         else:
             self.set_playback_mode(PlaybackMode.LOOP)
-            
+
+    def handle_volume_change(self, value):
+        self.media_player.set_volume(value)
+
     def handle_playback_finished(self):
         if self.is_compare_playing:
             self.is_compare_playing = False

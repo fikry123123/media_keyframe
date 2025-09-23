@@ -2,8 +2,9 @@ import os
 import cv2
 import numpy as np
 from PyQt5.QtWidgets import QLabel, QVBoxLayout, QWidget, QSizePolicy
-from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QMimeData
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QMimeData, QUrl
 from PyQt5.QtGui import QPixmap, QImage, QDragEnterEvent, QDropEvent
+from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
 
 class MediaPlayer(QWidget):
     frameIndexChanged = pyqtSignal(int, int)
@@ -13,7 +14,7 @@ class MediaPlayer(QWidget):
     playbackFinished = pyqtSignal()
     fileDropped = pyqtSignal(str, str)
     
-    def __init__(self):
+    def __init__(self, enable_audio=True):
         super().__init__()
         self.setAcceptDrops(True)
         self.setup_ui()
@@ -30,6 +31,11 @@ class MediaPlayer(QWidget):
         self.current_media_path = None
         # --- TAMBAHAN BARU: Penanda status video selesai ---
         self.has_finished = False
+        self._volume = 50
+        self.enable_audio = enable_audio
+        self.audio_player = QMediaPlayer(self) if enable_audio else None
+        if self.audio_player:
+            self.audio_player.setVolume(self._volume)
 
     def setup_ui(self):
         layout = QVBoxLayout(self)
@@ -50,6 +56,40 @@ class MediaPlayer(QWidget):
         """)
         self.video_label.setText("Load media file to start...")
         layout.addWidget(self.video_label)
+
+    def _prepare_audio(self, file_path):
+        if not self.audio_player:
+            return
+        self.audio_player.stop()
+        if file_path:
+            media = QMediaContent(QUrl.fromLocalFile(file_path))
+            self.audio_player.setMedia(media)
+            self.audio_player.setVolume(self._volume)
+            self._sync_audio_to_current_frame(force=True)
+        else:
+            self.audio_player.setMedia(QMediaContent())
+
+    def _current_time_ms(self):
+        if self.fps <= 0 or self.current_frame_index < 0:
+            return 0
+        return int((self.current_frame_index / self.fps) * 1000)
+
+    def _sync_audio_to_current_frame(self, force=False):
+        if not self.audio_player or self.fps <= 0 or self.current_frame_index < 0:
+            return
+        if self.is_playing and not force:
+            return
+        target_ms = self._current_time_ms()
+        if force or abs(self.audio_player.position() - target_ms) > max(60, int(1000 / max(self.fps, 1))):
+            self.audio_player.setPosition(target_ms)
+
+    def set_volume(self, value):
+        self._volume = max(0, min(100, int(value)))
+        if self.audio_player:
+            self.audio_player.setVolume(self._volume)
+
+    def volume(self):
+        return self._volume
         
     def load_media(self, file_path):
         self.clear_media()
@@ -78,6 +118,7 @@ class MediaPlayer(QWidget):
                     self.frameReady.emit()
                     self.current_media_path = file_path
                     self.has_finished = False # Reset penanda saat load media baru
+                    self._prepare_audio(file_path)
                     return True
                 else:
                     cap.release()
@@ -97,6 +138,7 @@ class MediaPlayer(QWidget):
                 self.frameReady.emit()
                 self.current_media_path = file_path
                 self.has_finished = False # Reset penanda saat load media baru
+                self._prepare_audio(None)
                 return True
         except Exception as e:
             print(f"Error loading media: {e}")
@@ -133,27 +175,34 @@ class MediaPlayer(QWidget):
     # --- PERUBAHAN LOGIKA DI FUNGSI INI ---
     def toggle_play(self):
         if not self.is_video or not self.video_capture: return
-        
+
         # Jika video sudah selesai, kembali ke awal sebelum memutar
         if self.has_finished:
             self.seek_to_position(0)
             self.has_finished = False
-        
+
         if self.is_playing:
             self.video_timer.stop()
             self.is_playing = False
+            if self.audio_player and self.audio_player.state() == QMediaPlayer.PlayingState:
+                self.audio_player.pause()
         else:
             if self.fps > 0:
                 interval = int(1000 / self.fps)
             else:
-                interval = 41 
+                interval = 41
             self.video_timer.start(interval)
             self.is_playing = True
+            if self.audio_player and self.audio_player.mediaStatus() != QMediaPlayer.NoMedia:
+                self._sync_audio_to_current_frame(force=True)
+                self.audio_player.play()
         self.playStateChanged.emit(self.is_playing)
         
     def stop(self):
         if self.video_timer.isActive(): self.video_timer.stop()
         self.is_playing = False
+        if self.audio_player:
+            self.audio_player.stop()
         if self.is_video and self.video_capture:
             self.video_capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
             ret, frame = self.video_capture.read()
@@ -163,6 +212,7 @@ class MediaPlayer(QWidget):
                 self.current_frame_index = int(self.video_capture.get(cv2.CAP_PROP_POS_FRAMES)) - 1
                 self.display_frame(frame)
                 self.frameIndexChanged.emit(self.current_frame_index, self.total_frames)
+                self._sync_audio_to_current_frame(force=True)
         self.playStateChanged.emit(False)
         self.has_finished = False
         
@@ -179,6 +229,7 @@ class MediaPlayer(QWidget):
                 self.display_frame(frame)
                 self.frameIndexChanged.emit(self.current_frame_index, self.total_frames)
                 self.has_finished = False
+                self._sync_audio_to_current_frame()
         
     def next_frame(self):
         if not self.is_video or not self.video_capture: return
@@ -191,6 +242,7 @@ class MediaPlayer(QWidget):
                 self.display_frame(frame)
                 self.frameIndexChanged.emit(self.current_frame_index, self.total_frames)
                 self.has_finished = False
+                self._sync_audio_to_current_frame()
         
     def seek_to_position(self, position):
         if not self.is_video or not self.video_capture: return
@@ -205,6 +257,7 @@ class MediaPlayer(QWidget):
                 self.display_frame(frame)
                 self.frameIndexChanged.emit(self.current_frame_index, self.total_frames)
                 self.has_finished = False # Jika user seek, video belum selesai
+                self._sync_audio_to_current_frame(force=True)
                 
     def update_video_frame(self):
         if not self.is_video or not self.video_capture or not self.is_playing: return
@@ -219,11 +272,15 @@ class MediaPlayer(QWidget):
             self.video_timer.stop()
             self.is_playing = False
             self.has_finished = True # Tandai video sudah selesai
+            if self.audio_player:
+                self.audio_player.stop()
             self.playStateChanged.emit(False)
             self.playbackFinished.emit()
             
     def closeEvent(self, event):
         if self.video_capture: self.video_capture.release()
+        if self.audio_player:
+            self.audio_player.stop()
         super().closeEvent(event)
 
     def has_media(self): return self.current_media_path is not None
@@ -245,6 +302,7 @@ class MediaPlayer(QWidget):
         self.frameIndexChanged.emit(-1, 0)
         self.fpsChanged.emit(0.0)
         self.has_finished = False
+        self._prepare_audio(None)
 
     def dragEnterEvent(self, event: QDragEnterEvent):
         if event.mimeData().hasUrls() or event.mimeData().hasFormat("application/x-playlist-paths"):

@@ -1,9 +1,10 @@
-from PyQt5.QtWidgets import QWidget, QHBoxLayout, QPushButton
+from PyQt5.QtWidgets import QWidget, QHBoxLayout, QPushButton, QLabel, QSlider, QSizePolicy, QSpacerItem
 from PyQt5.QtCore import Qt, pyqtSignal
 
 class MediaControls(QWidget):
     position_changed = pyqtSignal(int)
     compare_toggled = pyqtSignal()
+    volume_changed = pyqtSignal(int)
 
     def __init__(self):
         super().__init__()
@@ -80,7 +81,29 @@ class MediaControls(QWidget):
         self.compare_button.setToolTip("Switch to compare (side-by-side) view")
         self.compare_button.clicked.connect(self.compare_toggled.emit)
         layout.addWidget(self.compare_button)
-        
+
+        spacer = QSpacerItem(20, 10, QSizePolicy.Expanding, QSizePolicy.Minimum)
+        layout.addItem(spacer)
+
+        volume_label = QLabel("Volume")
+        volume_label.setStyleSheet("QLabel { color: #dddddd; font-size: 12px; }")
+        layout.addWidget(volume_label)
+
+        self.volume_slider = QSlider(Qt.Horizontal)
+        self.volume_slider.setRange(0, 100)
+        self.volume_slider.setValue(50)
+        self.volume_slider.setFixedWidth(110)
+        self.volume_slider.setToolTip("Volume")
+        self.volume_slider.valueChanged.connect(self.volume_changed.emit)
+        layout.addWidget(self.volume_slider)
+
+        self.volume_value_label = QLabel("50%")
+        self.volume_value_label.setStyleSheet("QLabel { color: #dddddd; font-size: 12px; }")
+        self.volume_value_label.setMinimumWidth(36)
+        layout.addWidget(self.volume_value_label)
+
+        self.volume_slider.valueChanged.connect(lambda v: self.volume_value_label.setText(f"{v}%"))
+
         layout.addStretch()
 
     def set_play_state(self, is_playing):
@@ -102,3 +125,11 @@ class MediaControls(QWidget):
     def set_playback_mode_state(self, icon, tooltip):
         self.playback_mode_button.setText(icon)
         self.playback_mode_button.setToolTip(tooltip)
+
+    def set_volume(self, value):
+        """Update slider position without breaking the displayed label."""
+        self.volume_slider.setValue(max(0, min(100, value)))
+
+    def volume(self):
+        """Return current volume percentage."""
+        return self.volume_slider.value()
