@@ -418,31 +418,28 @@ class MainWindow(QMainWindow):
         if self.compare_mode: self.update_composite_view()
         self.status_bar.showMessage("Project cleared")
         self.update_playlist_item_indicator()
+        self.clear_all_marks()
         
     def toggle_play(self):
-            if self.compare_mode:
-                if self.is_compare_playing:
-                    self.compare_timer.stop()
-                    self.is_compare_playing = False
-                else:
-                    is_a_fin = self.media_player.total_frames > 0 and self.media_player.current_frame_index >= self.media_player.total_frames - 1
-                    is_b_fin = self.media_player_2.total_frames > 0 and self.media_player_2.current_frame_index >= self.media_player_2.total_frames - 1
-                    if is_a_fin and is_b_fin:
-                        self.media_player.seek_to_position(0)
-                        self.media_player_2.seek_to_position(0)
-                        # Reset penanda selesai untuk kedua player
-                        self.media_player.has_finished = False
-                        self.media_player_2.has_finished = False
-                    fps_a = self.media_player.fps if self.media_player.fps > 0 else 30
-                    fps_b = self.media_player_2.fps if self.media_player_2.fps > 0 else 30
-                    self.compare_timer.start(int(1000 / min(fps_a, fps_b)))
-                    self.is_compare_playing = True
-                self.controls.set_play_state(self.is_compare_playing)
+        if self.compare_mode:
+            if self.is_compare_playing:
+                self.compare_timer.stop()
+                self.is_compare_playing = False
             else:
-                # --- PERUBAHAN DI SINI ---
-                # Logika kompleks dihapus, sekarang cukup panggil toggle_play dari media_player
-                self.media_player.toggle_play()
-
+                is_a_fin = self.media_player.total_frames > 0 and self.media_player.current_frame_index >= self.media_player.total_frames - 1
+                is_b_fin = self.media_player_2.total_frames > 0 and self.media_player_2.current_frame_index >= self.media_player_2.total_frames - 1
+                if is_a_fin and is_b_fin:
+                    self.media_player.seek_to_position(0)
+                    self.media_player_2.seek_to_position(0)
+                    self.media_player.has_finished = False
+                    self.media_player_2.has_finished = False
+                fps_a = self.media_player.fps if self.media_player.fps > 0 else 30
+                fps_b = self.media_player_2.fps if self.media_player_2.fps > 0 else 30
+                self.compare_timer.start(int(1000 / min(fps_a, fps_b)))
+                self.is_compare_playing = True
+            self.controls.set_play_state(self.is_compare_playing)
+        else:
+            self.media_player.toggle_play()
             
     def update_compare_frames(self):
         self.media_player.next_frame()
@@ -494,7 +491,61 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence(Qt.Key_End), self).activated.connect(self.go_to_last_frame)
         QShortcut(QKeySequence("Ctrl+Up"), self).activated.connect(self.play_previous_timeline_item)
         QShortcut(QKeySequence("Ctrl+Down"), self).activated.connect(self.play_next_timeline_item)
+        # --- PERUBAHAN SHORTCUT MARKING ---
+        QShortcut(QKeySequence(Qt.Key_F), self).activated.connect(self.toggle_mark_at_current_frame)
+        QShortcut(QKeySequence("Ctrl+Shift+M"), self).activated.connect(self.clear_all_marks)
+        # --- SHORTCUT BARU UNTUK LOMPAT ANTAR MARK ---
+        QShortcut(QKeySequence(Qt.Key_BracketRight), self).activated.connect(self.jump_to_next_mark)
+        QShortcut(QKeySequence(Qt.Key_BracketLeft), self).activated.connect(self.jump_to_previous_mark)
+
+    def toggle_mark_at_current_frame(self):
+        if not self.media_player.has_media(): return
+        current_frame = self.media_player.current_frame_index
+        if current_frame in self.marks:
+            self.marks.remove(current_frame)
+            self.status_bar.showMessage(f"Mark removed from frame {current_frame + 1}", 2000)
+        else:
+            self.marks.append(current_frame)
+            self.marks.sort()
+            self.status_bar.showMessage(f"Mark added at frame {current_frame + 1}", 2000)
+        self.timeline.set_marks(self.marks)
+
+    def clear_all_marks(self):
+        if not self.marks: return
+        self.marks.clear()
+        self.timeline.set_marks(self.marks)
+        self.status_bar.showMessage("All marks cleared", 2000)
         
+    # --- FUNGSI BARU UNTUK LOMPAT ANTAR MARK ---
+    def jump_to_next_mark(self):
+        """Melompat ke penanda berikutnya."""
+        if not self.marks: return
+        current_frame = self.media_player.current_frame_index
+        next_mark = None
+        for mark in self.marks:
+            if mark > current_frame:
+                next_mark = mark
+                break
+        # Jika tidak ada marker berikutnya, lompat ke marker pertama (looping)
+        if next_mark is None:
+            next_mark = self.marks[0]
+        self.seek_to_position(next_mark)
+
+    def jump_to_previous_mark(self):
+        """Melompat ke penanda sebelumnya."""
+        if not self.marks: return
+        current_frame = self.media_player.current_frame_index
+        prev_mark = None
+        for mark in reversed(self.marks):
+            if mark < current_frame:
+                prev_mark = mark
+                break
+        # Jika tidak ada marker sebelumnya, lompat ke marker terakhir (looping)
+        if prev_mark is None:
+            prev_mark = self.marks[-1]
+        self.seek_to_position(prev_mark)
+    # --- AKHIR FUNGSI BARU ---
+
     def find_item_by_path_recursive(self, path, root_item):
         if not path or not root_item: return None
         iterator = QTreeWidgetItemIterator(root_item)
@@ -517,14 +568,10 @@ class MainWindow(QMainWindow):
             if potential_next.data(0, Qt.UserRole):
                 next_item = potential_next
                 break
-        
         if next_item:
             self.playlist_widget.setCurrentItem(next_item)
-            # --- PERBAIKAN BUG UTAMA ADA DI SINI ---
-            # Panggil load_single_file secara langsung untuk menghindari reset mode playback
             next_file_path = next_item.data(0, Qt.UserRole)
             self.load_single_file(next_file_path)
-            
             if self.playback_mode == PlaybackMode.PLAY_NEXT:
                 QTimer.singleShot(100, self.media_player.toggle_play)
         else:
@@ -583,12 +630,14 @@ class MainWindow(QMainWindow):
         if self.compare_timer.isActive():
             self.compare_timer.stop()
             self.is_compare_playing = False
+        self.clear_all_marks()
         success = self.media_player.load_media(file_path)
         if success: self.status_bar.showMessage(f"Loaded: {os.path.basename(file_path)}")
         else: self.status_bar.showMessage(f"Failed to load file")
         self.update_playlist_item_indicator()
             
     def load_compare_files(self, file1, file2):
+        self.clear_all_marks()
         self.media_player.load_media(file1)
         self.media_player_2.load_media(file2)
         f1 = os.path.basename(file1) if file1 else "Empty"
@@ -664,11 +713,39 @@ class MainWindow(QMainWindow):
             text_b = f"B: {self.media_player_B_fps:.2f} FPS"
             self.fps_label.setText(f"{text_a} | {text_b}")
             
-    def go_to_first_frame(self): self.seek_to_position(0)
+    def go_to_first_frame(self):
+        if self.media_player.is_playing or self.is_compare_playing:
+            self.toggle_play()
+        self.seek_to_position(0)
+        if self.compare_mode:
+            self.media_player.has_finished = False
+            self.media_player_2.has_finished = False
+        else:
+            self.media_player.has_finished = False
     
     def go_to_last_frame(self):
-        total = self.media_player.total_frames
-        if total > 0: self.seek_to_position(total - 1)
+        if self.is_compare_playing:
+            self.compare_timer.stop()
+            self.is_compare_playing = False
+            self.controls.set_play_state(False)
+        elif self.media_player.is_playing:
+            self.media_player.toggle_play()
+
+        if self.compare_mode:
+            total_a = self.media_player.total_frames
+            if total_a > 0:
+                self.media_player.seek_to_position(total_a - 1)
+                self.media_player.has_finished = True
+            total_b = self.media_player_2.total_frames
+            if total_b > 0:
+                self.media_player_2.seek_to_position(total_b - 1)
+                self.media_player_2.has_finished = True
+            self.update_composite_view()
+        else:
+            total = self.media_player.total_frames
+            if total > 0:
+                self.media_player.seek_to_position(total - 1)
+                self.media_player.has_finished = True
         
     def create_placeholder_frame(self, text, width, height):
         placeholder = np.zeros((height, width, 3), dtype=np.uint8)
