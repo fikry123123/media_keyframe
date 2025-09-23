@@ -420,29 +420,29 @@ class MainWindow(QMainWindow):
         self.update_playlist_item_indicator()
         
     def toggle_play(self):
-        if self.compare_mode:
-            if self.is_compare_playing:
-                self.compare_timer.stop()
-                self.is_compare_playing = False
+            if self.compare_mode:
+                if self.is_compare_playing:
+                    self.compare_timer.stop()
+                    self.is_compare_playing = False
+                else:
+                    is_a_fin = self.media_player.total_frames > 0 and self.media_player.current_frame_index >= self.media_player.total_frames - 1
+                    is_b_fin = self.media_player_2.total_frames > 0 and self.media_player_2.current_frame_index >= self.media_player_2.total_frames - 1
+                    if is_a_fin and is_b_fin:
+                        self.media_player.seek_to_position(0)
+                        self.media_player_2.seek_to_position(0)
+                        # Reset penanda selesai untuk kedua player
+                        self.media_player.has_finished = False
+                        self.media_player_2.has_finished = False
+                    fps_a = self.media_player.fps if self.media_player.fps > 0 else 30
+                    fps_b = self.media_player_2.fps if self.media_player_2.fps > 0 else 30
+                    self.compare_timer.start(int(1000 / min(fps_a, fps_b)))
+                    self.is_compare_playing = True
+                self.controls.set_play_state(self.is_compare_playing)
             else:
-                is_a_fin = self.media_player.total_frames > 0 and self.media_player.current_frame_index >= self.media_player.total_frames - 1
-                is_b_fin = self.media_player_2.total_frames > 0 and self.media_player_2.current_frame_index >= self.media_player_2.total_frames - 1
-                if is_a_fin and is_b_fin:
-                    self.media_player.seek_to_position(0)
-                    self.media_player_2.seek_to_position(0)
-                    self.update_composite_view()
-                fps_a = self.media_player.fps if self.media_player.fps > 0 else 30
-                fps_b = self.media_player_2.fps if self.media_player_2.fps > 0 else 30
-                self.compare_timer.start(int(1000 / min(fps_a, fps_b)))
-                self.is_compare_playing = True
-            self.controls.set_play_state(self.is_compare_playing)
-        else:
-            is_paused_at_end = (self.media_player.has_media() and not self.media_player.is_playing and
-                                self.media_player.total_frames > 0 and
-                                self.media_player.current_frame_index >= self.media_player.total_frames - 1)
-            if is_paused_at_end:
-                self.media_player.seek_to_position(0)
-            self.media_player.toggle_play()
+                # --- PERUBAHAN DI SINI ---
+                # Logika kompleks dihapus, sekarang cukup panggil toggle_play dari media_player
+                self.media_player.toggle_play()
+
             
     def update_compare_frames(self):
         self.media_player.next_frame()
@@ -517,9 +517,14 @@ class MainWindow(QMainWindow):
             if potential_next.data(0, Qt.UserRole):
                 next_item = potential_next
                 break
+        
         if next_item:
             self.playlist_widget.setCurrentItem(next_item)
-            self.load_from_tree(next_item)
+            # --- PERBAIKAN BUG UTAMA ADA DI SINI ---
+            # Panggil load_single_file secara langsung untuk menghindari reset mode playback
+            next_file_path = next_item.data(0, Qt.UserRole)
+            self.load_single_file(next_file_path)
+            
             if self.playback_mode == PlaybackMode.PLAY_NEXT:
                 QTimer.singleShot(100, self.media_player.toggle_play)
         else:

@@ -1,7 +1,6 @@
 import os
 import cv2
 import numpy as np
-# --- TAMBAHKAN QSizePolicy DI SINI ---
 from PyQt5.QtWidgets import QLabel, QVBoxLayout, QWidget, QSizePolicy
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QMimeData
 from PyQt5.QtGui import QPixmap, QImage, QDragEnterEvent, QDropEvent
@@ -29,17 +28,14 @@ class MediaPlayer(QWidget):
         self.video_timer.timeout.connect(self.update_video_frame)
         self.fps = 30
         self.current_media_path = None
+        # --- TAMBAHAN BARU: Penanda status video selesai ---
+        self.has_finished = False
 
     def setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.video_label = QLabel()
-        
-        # --- PERUBAHAN DI SINI ---
-        # Atur agar QLabel tidak mencoba mengubah ukuran window.
-        # Ia akan mengisi ruang yang tersedia saja.
         self.video_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
-        
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setScaledContents(False)
         self.video_label.setStyleSheet("""
@@ -81,6 +77,7 @@ class MediaPlayer(QWidget):
                     self.fpsChanged.emit(self.fps)
                     self.frameReady.emit()
                     self.current_media_path = file_path
+                    self.has_finished = False # Reset penanda saat load media baru
                     return True
                 else:
                     cap.release()
@@ -99,6 +96,7 @@ class MediaPlayer(QWidget):
                 self.fpsChanged.emit(0.0)
                 self.frameReady.emit()
                 self.current_media_path = file_path
+                self.has_finished = False # Reset penanda saat load media baru
                 return True
         except Exception as e:
             print(f"Error loading media: {e}")
@@ -132,8 +130,15 @@ class MediaPlayer(QWidget):
         if self.displayed_frame_source is not None:
             self.display_frame(self.displayed_frame_source)
             
+    # --- PERUBAHAN LOGIKA DI FUNGSI INI ---
     def toggle_play(self):
         if not self.is_video or not self.video_capture: return
+        
+        # Jika video sudah selesai, kembali ke awal sebelum memutar
+        if self.has_finished:
+            self.seek_to_position(0)
+            self.has_finished = False
+        
         if self.is_playing:
             self.video_timer.stop()
             self.is_playing = False
@@ -159,6 +164,7 @@ class MediaPlayer(QWidget):
                 self.display_frame(frame)
                 self.frameIndexChanged.emit(self.current_frame_index, self.total_frames)
         self.playStateChanged.emit(False)
+        self.has_finished = False
         
     def previous_frame(self):
         if not self.is_video or not self.video_capture: return
@@ -172,6 +178,7 @@ class MediaPlayer(QWidget):
                 self.current_frame_index = int(self.video_capture.get(cv2.CAP_PROP_POS_FRAMES)) - 1
                 self.display_frame(frame)
                 self.frameIndexChanged.emit(self.current_frame_index, self.total_frames)
+                self.has_finished = False
         
     def next_frame(self):
         if not self.is_video or not self.video_capture: return
@@ -183,6 +190,7 @@ class MediaPlayer(QWidget):
                 self.current_frame_index = int(self.video_capture.get(cv2.CAP_PROP_POS_FRAMES)) - 1
                 self.display_frame(frame)
                 self.frameIndexChanged.emit(self.current_frame_index, self.total_frames)
+                self.has_finished = False
         
     def seek_to_position(self, position):
         if not self.is_video or not self.video_capture: return
@@ -196,6 +204,7 @@ class MediaPlayer(QWidget):
                 self.current_frame_index = int(self.video_capture.get(cv2.CAP_PROP_POS_FRAMES)) - 1
                 self.display_frame(frame)
                 self.frameIndexChanged.emit(self.current_frame_index, self.total_frames)
+                self.has_finished = False # Jika user seek, video belum selesai
                 
     def update_video_frame(self):
         if not self.is_video or not self.video_capture or not self.is_playing: return
@@ -209,6 +218,7 @@ class MediaPlayer(QWidget):
         else:
             self.video_timer.stop()
             self.is_playing = False
+            self.has_finished = True # Tandai video sudah selesai
             self.playStateChanged.emit(False)
             self.playbackFinished.emit()
             
@@ -234,6 +244,7 @@ class MediaPlayer(QWidget):
         self.video_label.setPixmap(QPixmap())
         self.frameIndexChanged.emit(-1, 0)
         self.fpsChanged.emit(0.0)
+        self.has_finished = False
 
     def dragEnterEvent(self, event: QDragEnterEvent):
         if event.mimeData().hasUrls() or event.mimeData().hasFormat("application/x-playlist-paths"):
