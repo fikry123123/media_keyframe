@@ -14,8 +14,9 @@ from media_controls import MediaControls
 from timeline_widget import TimelineWidget
 
 
-# --- CLASS BARU UNTUK MENANGANI DRAG & DROP PADA TREE ---
 class ProjectTreeWidget(QTreeWidget):
+    filesDropped = pyqtSignal(list)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.source_item = None
@@ -27,52 +28,65 @@ class ProjectTreeWidget(QTreeWidget):
         
         paths = []
         for item in self.selectedItems():
-            # Hanya izinkan drag dari item video di dalam Source
             if item.parent() == self.source_item:
                 paths.append(item.data(0, Qt.UserRole))
 
         if not paths:
             return
 
-        # Gunakan custom mime type untuk identifikasi internal
         mime_data.setData("application/x-playlist-paths", bytearray(",".join(paths), 'utf-8'))
         drag.setMimeData(mime_data)
         drag.exec_(supportedActions)
 
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        if event.mimeData().hasUrls() or event.mimeData().hasFormat("application/x-playlist-paths"):
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
     def dragMoveEvent(self, event):
         target_item = self.itemAt(event.pos())
-        
-        # Izinkan drop jika target adalah Timeline atau subfolder di dalamnya
         is_valid_target = False
-        if target_item:
-            if target_item == self.timeline_item:
-                is_valid_target = True
-            elif target_item.parent() == self.timeline_item and target_item.data(0, Qt.UserRole) is None:
-                is_valid_target = True
-            # Izinkan juga drop ke item video di timeline (akan dimasukkan ke parent-nya)
-            elif target_item.parent() and target_item.parent() == self.timeline_item:
-                 is_valid_target = True
+        
+        if event.mimeData().hasUrls():
+            is_valid_target = True
+        elif event.mimeData().hasFormat("application/x-playlist-paths"):
+            if target_item:
+                def is_descendant_of_timeline(item):
+                    parent = item
+                    while parent:
+                        if parent == self.timeline_item:
+                            return True
+                        parent = parent.parent()
+                    return False
 
+                if is_descendant_of_timeline(target_item):
+                    is_valid_target = True
 
-        if is_valid_target and event.mimeData().hasFormat("application/x-playlist-paths"):
+        if is_valid_target:
             event.accept()
         else:
             event.ignore()
 
     def dropEvent(self, event):
-        target_item = self.itemAt(event.pos())
-        
-        if not target_item:
-            event.ignore()
+        if event.mimeData().hasUrls():
+            files = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
+            if files:
+                self.filesDropped.emit(files)
+            event.accept()
             return
 
-        # Jika targetnya adalah item video, gunakan parent-nya (folder) sebagai target
-        if target_item.data(0, Qt.UserRole) is not None:
-            target_folder = target_item.parent()
-        else:
-            target_folder = target_item
+        if event.mimeData().hasFormat("application/x-playlist-paths"):
+            target_item = self.itemAt(event.pos())
+            if not target_item:
+                event.ignore()
+                return
+
+            if target_item.data(0, Qt.UserRole) is not None:
+                target_folder = target_item.parent()
+            else:
+                target_folder = target_item
             
-        if target_folder and event.mimeData().hasFormat("application/x-playlist-paths"):
             paths_data = event.mimeData().data("application/x-playlist-paths")
             paths = str(paths_data, 'utf-8').split(',')
             
@@ -131,7 +145,11 @@ class MainWindow(QMainWindow):
         self.is_compare_playing = False
         self.compare_timer = QTimer(self)
         self.compare_timer.timeout.connect(self.update_compare_frames)
-        self.setAcceptDrops(True)
+        self.setAcceptDrops(False)
+        
+        # Inisialisasi variabel untuk menyimpan ukuran splitter
+        self.splitter_sizes = []
+
         self.setup_ui()
         self.controls.set_playback_mode_state("🔁", "Playback Mode: Loop")
 
@@ -148,7 +166,6 @@ class MainWindow(QMainWindow):
         playlist_layout.setContentsMargins(0, 0, 0, 0)
         playlist_layout.setSpacing(0)
 
-        # --- TOOLBAR UNTUK PANEL PROYEK ---
         self.playlist_toolbar = QWidget()
         playlist_toolbar_layout = QHBoxLayout(self.playlist_toolbar)
         playlist_toolbar_layout.setContentsMargins(5, 5, 5, 5)
@@ -177,7 +194,6 @@ class MainWindow(QMainWindow):
         playlist_toolbar_layout.addWidget(self.delete_item_button)
         playlist_toolbar_layout.addStretch()
         playlist_layout.addWidget(self.playlist_toolbar)
-        # --- AKHIR TOOLBAR ---
         
         self.playlist_widget = ProjectTreeWidget(self)
         self.playlist_widget.setHeaderLabels(["Project"])
@@ -226,24 +242,48 @@ class MainWindow(QMainWindow):
         self.setup_shortcuts()
         self.update_toolbar_button_states()
 
+    def connect_signals(self):
+        self.controls.play_button.clicked.connect(self.toggle_play)
+        self.controls.prev_button.clicked.connect(self.previous_frame)
+        self.controls.next_button.clicked.connect(self.next_frame)
+        self.controls.compare_toggled.connect(self.toggle_compare_mode_from_button)
+        self.controls.first_frame_button.clicked.connect(self.go_to_first_frame)
+        self.controls.last_frame_button.clicked.connect(self.go_to_last_frame)
+        self.controls.playback_mode_button.clicked.connect(self.cycle_playback_mode)
+        self.timeline.position_changed.connect(self.seek_to_position)
+        self.timeline.display_mode_changed.connect(self.set_time_display_mode)
+        self.media_player.frameIndexChanged.connect(self.update_frame_counter)
+        self.media_player.playStateChanged.connect(self.controls.set_play_state)
+        self.media_player.playbackFinished.connect(self.handle_playback_finished)
+        self.media_player_2.frameIndexChanged.connect(self.update_frame_counter_B)
+        self.media_player.fpsChanged.connect(lambda fps: self.update_fps_display(fps, 'A'))
+        self.media_player_2.fpsChanged.connect(lambda fps: self.update_fps_display(fps, 'B'))
+        self.media_player.fileDropped.connect(self.handle_file_drop_on_player)
+        self.add_folder_button.clicked.connect(self.add_new_folder_handler)
+        self.delete_item_button.clicked.connect(self.delete_selected_items_handler)
+        self.playlist_widget.itemSelectionChanged.connect(self.update_toolbar_button_states)
+        self.playlist_widget.filesDropped.connect(self.add_files_to_source)
+
     def show_tree_context_menu(self, pos):
         item = self.playlist_widget.itemAt(pos)
         if not item: return
         context_menu = QMenu(self)
-        is_timeline_folder = (item == self.timeline_item)
-        is_timeline_subfolder = (item.parent() == self.timeline_item and item.data(0, Qt.UserRole) is None)
-        if is_timeline_folder or is_timeline_subfolder:
+        is_timeline_folder = (item == self.timeline_item or (item.parent() is not None and item.data(0, Qt.UserRole) is None))
+        if is_timeline_folder:
             new_folder_action = context_menu.addAction("New Folder")
-            new_folder_action.triggered.connect(lambda: self.create_new_folder(item if is_timeline_subfolder else self.timeline_item))
-        if is_timeline_subfolder:
+            new_folder_action.triggered.connect(lambda: self.create_new_folder(item))
+        
+        is_sub_item = item.parent() is not None and item not in [self.source_item, self.timeline_item]
+        if is_sub_item:
             context_menu.addSeparator()
-            rename_action = context_menu.addAction("Rename Folder")
-            rename_action.triggered.connect(lambda: self.playlist_widget.editItem(item, 0))
-            delete_action = context_menu.addAction("Delete Folder")
-            delete_action.triggered.connect(lambda: item.parent().removeChild(item))
+            if item.data(0, Qt.UserRole) is None:
+                rename_action = context_menu.addAction("Rename Folder")
+                rename_action.triggered.connect(lambda: self.playlist_widget.editItem(item, 0))
+                delete_action = context_menu.addAction("Delete Folder")
+                delete_action.triggered.connect(lambda: item.parent().removeChild(item))
         if context_menu.actions():
             context_menu.exec_(self.playlist_widget.mapToGlobal(pos))
-
+            
     def create_new_folder(self, parent_item):
         base_name, name, count = "New Folder", "New Folder", 1
         existing = {parent_item.child(i).text(0) for i in range(parent_item.childCount())}
@@ -253,7 +293,7 @@ class MainWindow(QMainWindow):
         new_folder = QTreeWidgetItem(parent_item, [name])
         new_folder.setFlags(new_folder.flags() | Qt.ItemIsEditable)
         self.playlist_widget.editItem(new_folder, 0)
-    
+        
     def create_menu_bar(self):
         menubar = self.menuBar()
         file_menu = menubar.addMenu('File')
@@ -279,7 +319,7 @@ class MainWindow(QMainWindow):
         self.hide_playlist_action.setShortcut('Ctrl+H')
         self.hide_playlist_action.triggered.connect(self.toggle_playlist_panel)
         view_menu.addAction(self.hide_playlist_action)
-
+        
     def create_status_bar(self):
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
@@ -291,33 +331,7 @@ class MainWindow(QMainWindow):
         self.status_bar.addPermanentWidget(self.fps_label)
         self.status_bar.setStyleSheet("QStatusBar { font-size: 12px; font-weight: bold; }")
         self.status_bar.showMessage("Ready")
-
-    def connect_signals(self):
-        # Media Controls
-        self.controls.play_button.clicked.connect(self.toggle_play)
-        self.controls.prev_button.clicked.connect(self.previous_frame)
-        self.controls.next_button.clicked.connect(self.next_frame)
-        self.controls.compare_toggled.connect(self.toggle_compare_mode_from_button)
-        self.controls.first_frame_button.clicked.connect(self.go_to_first_frame)
-        self.controls.last_frame_button.clicked.connect(self.go_to_last_frame)
-        self.controls.playback_mode_button.clicked.connect(self.cycle_playback_mode)
-        # Timeline
-        self.timeline.position_changed.connect(self.seek_to_position)
-        self.timeline.display_mode_changed.connect(self.set_time_display_mode)
-        # Media Players
-        self.media_player.frameIndexChanged.connect(self.update_frame_counter)
-        self.media_player.playStateChanged.connect(self.controls.set_play_state)
-        self.media_player.playbackFinished.connect(self.handle_playback_finished)
-        self.media_player_2.frameIndexChanged.connect(self.update_frame_counter_B)
-        self.media_player.fpsChanged.connect(lambda fps: self.update_fps_display(fps, 'A'))
-        self.media_player_2.fpsChanged.connect(lambda fps: self.update_fps_display(fps, 'B'))
-        # Sinyal drop dari MediaPlayer
-        self.media_player.fileDropped.connect(self.handle_file_drop_on_player)
-        # Project Panel Toolbar
-        self.add_folder_button.clicked.connect(self.add_new_folder_handler)
-        self.delete_item_button.clicked.connect(self.delete_selected_items_handler)
-        self.playlist_widget.itemSelectionChanged.connect(self.update_toolbar_button_states)
-
+        
     def handle_file_drop_on_player(self, file_path, target_view):
         self.add_files_to_source([file_path])
         if not self.compare_mode:
@@ -325,19 +339,19 @@ class MainWindow(QMainWindow):
         else:
             if target_view == 'A':
                 self.load_compare_files(file_path, self.media_player_2.get_current_file_path())
-            else: # Target 'B'
+            else:
                 self.load_compare_files(self.media_player.get_current_file_path(), file_path)
-
+                
     def add_new_folder_handler(self):
         selected_item = self.playlist_widget.currentItem()
-        parent_item = self.timeline_item 
+        parent_item = self.timeline_item
         if selected_item:
-            if selected_item == self.timeline_item or (selected_item.parent() == self.timeline_item and selected_item.data(0, Qt.UserRole) is None):
+            if selected_item.data(0, Qt.UserRole) is None:
                 parent_item = selected_item
-            elif selected_item.parent() and (selected_item.parent() == self.timeline_item or selected_item.parent().parent() == self.timeline_item):
-                 parent_item = selected_item.parent()
+            elif selected_item.parent() is not None:
+                parent_item = selected_item.parent()
         self.create_new_folder(parent_item)
-
+        
     def delete_selected_items_handler(self):
         selected_items = self.playlist_widget.selectedItems()
         if not selected_items: return
@@ -345,23 +359,15 @@ class MainWindow(QMainWindow):
             if item == self.source_item or item == self.timeline_item: continue
             parent = item.parent()
             if parent: parent.removeChild(item)
-
+            
     def update_toolbar_button_states(self):
         selected_items = self.playlist_widget.selectedItems()
         can_delete = False
         if selected_items:
             can_delete = all(item not in [self.source_item, self.timeline_item] for item in selected_items)
         self.delete_item_button.setEnabled(can_delete)
-        can_add_folder = False
-        if not selected_items:
-            can_add_folder = True
-        elif len(selected_items) == 1:
-            item = selected_items[0]
-            parent = item.parent()
-            if item == self.timeline_item or (parent == self.timeline_item):
-                can_add_folder = True
-        self.add_folder_button.setEnabled(can_add_folder)
-    
+        self.add_folder_button.setEnabled(True)
+        
     def cycle_playback_mode(self):
         if self.playback_mode == PlaybackMode.LOOP:
             self.playback_mode = PlaybackMode.PLAY_NEXT
@@ -372,7 +378,7 @@ class MainWindow(QMainWindow):
         else:
             self.playback_mode = PlaybackMode.LOOP
             self.controls.set_playback_mode_state("🔁", "Playback Mode: Loop")
-
+            
     def handle_playback_finished(self):
         if self.is_compare_playing:
             self.is_compare_playing = False
@@ -385,25 +391,26 @@ class MainWindow(QMainWindow):
             current_path = self.media_player.get_current_file_path()
             item = self.find_item_by_path_recursive(current_path, self.timeline_item)
             if item: self.play_next_timeline_item()
-
+            
     def open_file(self):
-        file_paths, _ = QFileDialog.getOpenFileNames(self, "Open Media File", "", "Media Files (*.mp4 *.avi *.mov *.mkv *.jpg *.png);;All Files (*)")
+        file_paths, _ = QFileDialog.getOpenFileNames(self, "Open Media File", "",
+                                                     "Media Files (*.mp4 *.avi *.mov *.mkv *.jpg *.png);;All Files (*)")
         if file_paths:
             self.add_files_to_source(file_paths)
             if self.compare_mode: self.toggle_compare_mode(False)
             if file_paths: self.load_single_file(file_paths[0])
-
+            
     def open_image_sequence(self):
         folder_path = QFileDialog.getExistingDirectory(self, "Select Folder", "")
         if folder_path: pass
-
+        
     def add_files_to_source(self, file_paths):
         for path in file_paths:
             if os.path.exists(path) and not self.find_item_by_path_recursive(path, self.source_item):
                 item = QTreeWidgetItem(self.source_item, [os.path.basename(path)])
                 item.setData(0, Qt.UserRole, path)
                 item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled)
-
+                
     def clear_project_tree(self):
         self.playlist_widget.clear()
         self.source_item = QTreeWidgetItem(self.playlist_widget, ["Source"])
@@ -419,7 +426,7 @@ class MainWindow(QMainWindow):
         self.media_player_2.clear_media()
         if self.compare_mode: self.update_composite_view()
         self.status_bar.showMessage("Project cleared")
-
+        
     def toggle_play(self):
         if self.compare_mode:
             if self.is_compare_playing:
@@ -443,7 +450,7 @@ class MainWindow(QMainWindow):
                                 self.media_player.current_frame_index >= self.media_player.total_frames - 1)
             if is_paused_at_end: self.media_player.seek_to_position(0)
             self.media_player.toggle_play()
-
+            
     def update_compare_frames(self):
         self.media_player.next_frame()
         self.media_player_2.next_frame()
@@ -451,29 +458,29 @@ class MainWindow(QMainWindow):
         at_end_a = self.media_player.current_frame_index >= self.media_player.total_frames - 1
         at_end_b = self.media_player_2.current_frame_index >= self.media_player_2.total_frames - 1
         if (at_end_a and self.media_player.total_frames > 0) or (at_end_b and self.media_player_2.total_frames > 0):
-             self.compare_timer.stop()
-             self.handle_playback_finished()
-
+            self.compare_timer.stop()
+            self.handle_playback_finished()
+            
     def previous_frame(self):
         if self.is_compare_playing: return
         self.media_player.previous_frame()
         if self.compare_mode:
             self.media_player_2.previous_frame()
             self.update_composite_view()
-
+            
     def next_frame(self):
         if self.is_compare_playing: return
         self.media_player.next_frame()
         if self.compare_mode:
             self.media_player_2.next_frame()
             self.update_composite_view()
-
+            
     def seek_to_position(self, position):
         self.media_player.seek_to_position(position)
         if self.compare_mode:
             self.media_player_2.seek_to_position(position)
             self.update_composite_view()
-
+            
     def update_frame_counter(self, current_frame, total_frames):
         if self.compare_mode: return
         if total_frames <= 0:
@@ -483,9 +490,9 @@ class MainWindow(QMainWindow):
         self.frame_counter_label.setText(f"Frame: {current_frame + 1} / {total_frames}")
         self.timeline.set_duration(total_frames)
         self.timeline.set_position(current_frame)
-
+        
     def update_frame_counter_B(self, cf, tf): pass
-
+    
     def setup_shortcuts(self):
         QShortcut(QKeySequence(Qt.Key_Space), self).activated.connect(self.toggle_play)
         QShortcut(QKeySequence(Qt.Key_Left), self).activated.connect(self.previous_frame)
@@ -494,7 +501,7 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence(Qt.Key_End), self).activated.connect(self.go_to_last_frame)
         QShortcut(QKeySequence("Ctrl+Up"), self).activated.connect(self.play_previous_timeline_item)
         QShortcut(QKeySequence("Ctrl+Down"), self).activated.connect(self.play_next_timeline_item)
-
+        
     def find_item_by_path_recursive(self, path, root_item):
         if not path or not root_item: return None
         iterator = QTreeWidgetItemIterator(root_item)
@@ -504,7 +511,7 @@ class MainWindow(QMainWindow):
                 return item
             iterator += 1
         return None
-
+        
     def play_next_timeline_item(self):
         current_path = self.media_player.get_current_file_path()
         current_item = self.find_item_by_path_recursive(current_path, self.timeline_item)
@@ -528,7 +535,7 @@ class MainWindow(QMainWindow):
             self.load_from_tree(next_item)
             if self.playback_mode == PlaybackMode.PLAY_NEXT:
                 QTimer.singleShot(100, self.media_player.toggle_play)
-
+                
     def play_previous_timeline_item(self):
         current_path = self.media_player.get_current_file_path()
         current_item = self.find_item_by_path_recursive(current_path, self.timeline_item)
@@ -537,12 +544,12 @@ class MainWindow(QMainWindow):
         current_index = parent.indexOfChild(current_item)
         prev_item = None
         for i in range(current_index - 1, -1, -1):
-             potential_prev = parent.child(i)
-             if potential_prev.data(0, Qt.UserRole):
-                 prev_item = potential_prev
-                 break
+            potential_prev = parent.child(i)
+            if potential_prev.data(0, Qt.UserRole):
+                prev_item = potential_prev
+                break
         if not prev_item:
-            for i in range(parent.childCount() -1, current_index, -1):
+            for i in range(parent.childCount() - 1, current_index, -1):
                 potential_prev = parent.child(i)
                 if potential_prev.data(0, Qt.UserRole):
                     prev_item = potential_prev
@@ -550,13 +557,13 @@ class MainWindow(QMainWindow):
         if prev_item:
             self.playlist_widget.setCurrentItem(prev_item)
             self.load_from_tree(prev_item)
-
+            
     def load_from_tree(self, item, column=0):
         file_path = item.data(0, Qt.UserRole)
         if file_path:
             if self.compare_mode: self.toggle_compare_mode(False)
             self.load_single_file(file_path)
-
+            
     def load_single_file(self, file_path):
         if self.compare_timer.isActive():
             self.compare_timer.stop()
@@ -567,7 +574,7 @@ class MainWindow(QMainWindow):
             self.update_playlist_item_indicator(file_path, "A")
         else:
             self.status_bar.showMessage(f"Failed to load file")
-
+            
     def load_compare_files(self, file1, file2):
         self.media_player.load_media(file1)
         self.media_player_2.load_media(file2)
@@ -577,7 +584,7 @@ class MainWindow(QMainWindow):
         self.update_playlist_item_indicator(file1, "A")
         self.update_playlist_item_indicator(file2, "B")
         QTimer.singleShot(50, self.update_composite_view)
-
+        
     def toggle_compare_mode(self, enabled):
         if enabled == self.compare_mode: return
         self.compare_mode = enabled
@@ -591,7 +598,7 @@ class MainWindow(QMainWindow):
             self.media_player_2.clear_media()
             self.media_player.display_frame(self.media_player.current_frame)
             self.update_playlist_item_indicator(self.media_player.get_current_file_path(), "A")
-
+            
     def update_composite_view(self):
         frame_a = self.media_player.current_frame
         frame_b = self.media_player_2.current_frame
@@ -608,11 +615,15 @@ class MainWindow(QMainWindow):
         if target_h <= 0: return
         new_w_a = int(frame_a.shape[1] * (target_h / frame_a.shape[0])) if frame_a.shape[0] > 0 else 0
         new_w_b = int(frame_b.shape[1] * (target_h / frame_b.shape[0])) if frame_b.shape[0] > 0 else 0
-        frame_a_res = cv2.resize(frame_a, (new_w_a, target_h), interpolation=cv2.INTER_AREA) if new_w_a > 0 else np.zeros((target_h, 1, 3), dtype=np.uint8)
-        frame_b_res = cv2.resize(frame_b, (new_w_b, target_h), interpolation=cv2.INTER_AREA) if new_w_b > 0 else np.zeros((target_h, 1, 3), dtype=np.uint8)
+        frame_a_res = cv2.resize(frame_a, (new_w_a, target_h),
+                                 interpolation=cv2.INTER_AREA) if new_w_a > 0 else np.zeros((target_h, 1, 3),
+                                                                                            dtype=np.uint8)
+        frame_b_res = cv2.resize(frame_b, (new_w_b, target_h),
+                                 interpolation=cv2.INTER_AREA) if new_w_b > 0 else np.zeros((target_h, 1, 3),
+                                                                                            dtype=np.uint8)
         composite = cv2.hconcat([frame_a_res, frame_b_res])
         self.media_player.display_frame(composite)
-
+        
     def reset_playlist_indicators(self):
         iterator = QTreeWidgetItemIterator(self.playlist_widget)
         while iterator.value():
@@ -622,9 +633,8 @@ class MainWindow(QMainWindow):
                 cleaned = text.replace(" (A)", "").replace(" (B)", "").strip()
                 item.setText(0, cleaned)
             iterator += 1
-
+            
     def update_playlist_item_indicator(self, file_path, indicator):
-        # Pertama, hapus semua indikator lama
         iterator_reset = QTreeWidgetItemIterator(self.playlist_widget)
         while iterator_reset.value():
             item = iterator_reset.value()
@@ -632,29 +642,33 @@ class MainWindow(QMainWindow):
             if " (A)" in text or " (B)" in text:
                 item.setText(0, text.replace(" (A)", "").replace(" (B)", "").strip())
             iterator_reset += 1
-        
-        # Tambahkan indikator untuk file yang aktif
         item_a = self.find_item_by_path_recursive(self.media_player.get_current_file_path(), self.playlist_widget)
         if item_a: item_a.setText(0, f"{item_a.text(0)} (A)")
-        
         if self.compare_mode:
-            item_b = self.find_item_by_path_recursive(self.media_player_2.get_current_file_path(), self.playlist_widget)
+            item_b = self.find_item_by_path_recursive(self.media_player_2.get_current_file_path(),
+                                                      self.playlist_widget)
             if item_b: item_b.setText(0, f"{item_b.text(0)} (B)")
-
+            
     def update_fps_display(self, fps, indicator):
         if indicator == 'A': self.media_player_A_fps = fps
         elif indicator == 'B': self.media_player_B_fps = fps
-        if self.compare_mode:
+        
+        if not self.compare_mode and indicator == 'A':
+            self.timeline.set_fps(fps)
+            self.fps_label.setText(f"FPS: {self.media_player_A_fps:.2f}")
+        elif self.compare_mode:
+            if indicator == 'A':
+                self.timeline.set_fps(fps)
             text_a = f"A: {self.media_player_A_fps:.2f} FPS"
             text_b = f"B: {self.media_player_B_fps:.2f} FPS"
             self.fps_label.setText(f"{text_a} | {text_b}")
-        else: self.fps_label.setText(f"FPS: {self.media_player_A_fps:.2f}")
-
+            
     def go_to_first_frame(self): self.seek_to_position(0)
+    
     def go_to_last_frame(self):
         total = self.media_player.total_frames
         if total > 0: self.seek_to_position(total - 1)
-    
+        
     def create_placeholder_frame(self, text, width, height):
         placeholder = np.zeros((height, width, 3), dtype=np.uint8)
         font = cv2.FONT_HERSHEY_SIMPLEX
@@ -663,46 +677,38 @@ class MainWindow(QMainWindow):
         (text_width, text_height), baseline = cv2.getTextSize(text, font, scale, thickness)
         text_x = (width - text_width) // 2
         text_y = (height + text_height) // 2
-        cv2.putText(placeholder, text, (text_x, text_y), font, scale, (200,200,200), thickness)
+        cv2.putText(placeholder, text, (text_x, text_y), font, scale, (200, 200, 200), thickness)
         return placeholder
-
+        
     def toggle_compare_mode_from_button(self):
         self.toggle_compare_mode(not self.compare_mode)
         if self.compare_mode:
             selected_items = self.playlist_widget.selectedItems()
             files = [item.data(0, Qt.UserRole) for item in selected_items if item.data(0, Qt.UserRole)]
-            if len(files) >= 2: self.load_compare_files(files[0], files[1])
+            if len(files) >= 2:
+                self.load_compare_files(files[0], files[1])
             elif len(files) == 1 and self.media_player.has_media():
                 self.load_compare_files(self.media_player.get_current_file_path(), files[0])
             elif not self.media_player.has_media() and len(files) == 1:
                 self.load_compare_files(files[0], None)
-
+                
     def set_time_display_mode(self, show_timecode):
         self.show_timecode = show_timecode
-        self.seek_to_position(self.media_player.current_frame_index)
+        self.timeline.set_timecode_mode(show_timecode)
         
+    # --- PERUBAHAN DI SINI ---
     def toggle_playlist_panel(self):
-        self.playlist_widget_container.setVisible(not self.playlist_widget_container.isVisible())
-        
-    # --- AWAL DARI FUNGSI DRAG & DROP YANG DIPERBARUI ---
-    def dragEnterEvent(self, event: QDragEnterEvent):
-        # Fungsi ini hanya untuk menerima drop dari luar aplikasi (File Explorer)
-        # ke area kosong Jendela Utama.
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
+        """
+        Menyembunyikan atau menampilkan panel playlist (kiri) dan
+        mengingat ukurannya.
+        """
+        if self.playlist_widget_container.isVisible():
+            # Simpan ukuran saat ini sebelum menyembunyikan
+            self.splitter_sizes = self.splitter.sizes()
+            self.playlist_widget_container.setVisible(False)
         else:
-            event.ignore()
-
-    def dropEvent(self, event: QDropEvent):
-        # Fungsi ini hanya menangani drop dari luar aplikasi.
-        # Drop ke panel video dan daftar proyek ditangani oleh widget masing-masing.
-        if event.mimeData().hasUrls():
-            files = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
-            if files:
-                self.add_files_to_source(files)
-                # Muat file pertama ke pemutar utama
-                self.handle_file_drop_on_player(files[0], 'A')
-                event.acceptProposedAction()
-        else:
-            event.ignore()
-    # --- AKHIR DARI FUNGSI DRAG & DROP ---
+            # Tampilkan panel
+            self.playlist_widget_container.setVisible(True)
+            # Jika ada ukuran yang tersimpan, kembalikan
+            if self.splitter_sizes:
+                self.splitter.setSizes(self.splitter_sizes)
