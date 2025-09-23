@@ -39,6 +39,7 @@ class MediaPlayer(QWidget):
         if self.audio_player:
             self.audio_player.setVolume(self._volume)
         self.playback_start_time = None
+        self.compare_split_ratio = None
 
     def setup_ui(self):
         layout = QVBoxLayout(self)
@@ -99,6 +100,16 @@ class MediaPlayer(QWidget):
 
     def volume(self):
         return self._volume
+    
+    def set_compare_split(self, width_a=None, width_b=None):
+        if width_a is None or width_b is None:
+            self.compare_split_ratio = None
+            return
+        if width_a <= 0 or width_b <= 0:
+            self.compare_split_ratio = None
+            return
+        total = float(width_a + width_b)
+        self.compare_split_ratio = (width_a / total) if total > 0 else None
         
     def load_media(self, file_path):
         self.clear_media()
@@ -357,6 +368,7 @@ class MediaPlayer(QWidget):
         self.has_finished = False
         self.playback_start_time = None
         self._prepare_audio(None)
+        self.compare_split_ratio = None
 
     def dragEnterEvent(self, event: QDragEnterEvent):
         if event.mimeData().hasUrls() or event.mimeData().hasFormat("application/x-playlist-paths"):
@@ -376,9 +388,22 @@ class MediaPlayer(QWidget):
         
         if file_path:
             pos = event.pos()
+            split_ratio = self.compare_split_ratio if self.compare_split_ratio is not None else 0.5
+            if split_ratio <= 0.0 or split_ratio >= 1.0:
+                split_ratio = 0.5
+            split_x = self.width() * split_ratio
+
+            pixmap = self.video_label.pixmap()
+            if pixmap:
+                pm_width = pixmap.width()
+                label_width = self.video_label.width()
+                offset_x = (label_width - pm_width) / 2
+                relative_x = pos.x() - offset_x
+                if 0 <= relative_x <= pm_width:
+                    split_x = offset_x + pm_width * split_ratio
             target_view = 'A'
-            if pos.x() > self.width() / 2:
+            if pos.x() > split_x:
                 target_view = 'B'
-            
+
             self.fileDropped.emit(file_path, target_view)
             event.acceptProposedAction()

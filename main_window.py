@@ -17,7 +17,7 @@ from timeline_widget import TimelineWidget
 
 
 class ProjectTreeWidget(QTreeWidget):
-    filesDroppedOnTarget = pyqtSignal(list, QTreeWidgetItem)
+    filesDroppedOnTarget = pyqtSignal(list, object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -87,11 +87,8 @@ class ProjectTreeWidget(QTreeWidget):
             files = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
             if files:
                 target = self.itemAt(event.pos())
-                if target:
-                    self.filesDroppedOnTarget.emit(files, target)
-                    event.accept()
-                else:
-                    event.ignore()
+                self.filesDroppedOnTarget.emit(files, target)
+            event.accept()
             return
 
         if event.mimeData().hasFormat("application/x-playlist-paths"):
@@ -775,6 +772,7 @@ class MainWindow(QMainWindow):
             self.is_compare_playing = False
         self.clear_all_marks()
         success = self.media_player.load_media(file_path)
+        self.media_player.set_compare_split()
         if success: self.status_bar.showMessage(f"Loaded: {os.path.basename(file_path)}")
         else: self.status_bar.showMessage(f"Failed to load file")
         self.update_playlist_item_indicator()
@@ -801,6 +799,7 @@ class MainWindow(QMainWindow):
                 self.is_compare_playing = False
             self.media_player_2.clear_media()
             self.media_player.display_frame(self.media_player.current_frame)
+            self.media_player.set_compare_split()
         self.update_playlist_item_indicator()
             
     def update_composite_view(self):
@@ -824,6 +823,7 @@ class MainWindow(QMainWindow):
         new_w_b = int(frame_b.shape[1] * (target_h / frame_b.shape[0])) if frame_b.shape[0] > 0 else 0
         frame_a_res = cv2.resize(frame_a, (new_w_a, target_h), interpolation=cv2.INTER_AREA) if new_w_a > 0 else np.zeros((target_h, 1, 3), dtype=np.uint8)
         frame_b_res = cv2.resize(frame_b, (new_w_b, target_h), interpolation=cv2.INTER_AREA) if new_w_b > 0 else np.zeros((target_h, 1, 3), dtype=np.uint8)
+        self.media_player.set_compare_split(frame_a_res.shape[1], frame_b_res.shape[1])
         composite = cv2.hconcat([frame_a_res, frame_b_res])
         self.media_player.display_frame(composite)
         
