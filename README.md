@@ -1,149 +1,24 @@
-# Studio Media Player
+# Keyframe Player for Linux
 
-Media player yang dioptimalkan untuk melihat image sequence dan file video dengan antarmuka yang mudah digunakan.
+## AppImage Compilation Instructions
 
-## Fitur Utama
-
-- **Image Sequence Viewer**: Pilih folder berisi banyak foto dan putar sebagai sequence
-- **Drag & Drop Support**: Drag file video/gambar langsung ke aplikasi
-- **Playlist Management**: Panel playlist untuk mengelola multiple file
-- **Compare Mode**: Bandingkan 2 video/gambar secara berdampingan
-- **Frame Counter Persisten**: Tampilan frame counter yang selalu terlihat
-- **Legibilitas Optimal**: Kontras warna dan ukuran font yang telah dioptimalkan
-- **Kontrol Kecepatan**: Atur kecepatan playback untuk image sequence (1-30 FPS)
-- **Keyboard Shortcuts**: Navigasi cepat menggunakan keyboard
-- **Dark Theme**: Antarmuka gelap yang nyaman untuk mata
-
-## Instalasi
-
-1. **Pastikan Python 3.7+ terinstall**
-
-2. **Install dependencies:**
+1. Install the necessary dependencies:
    ```bash
-   pip install -r requirements.txt
+   sudo apt-get install build-essential git cmake
    ```
-
-3. **Jalankan aplikasi:**
+2. Clone the repository:
    ```bash
-   python main.py
+   git clone https://github.com/Envyana/media_keyframe.git
+   cd media_keyframe
    ```
-
-## Cara Penggunaan
-
-### Membuka File
-- **File → Open File** (Ctrl+O): Buka single file (video/image)
-- **File → Open Image Sequence** (Ctrl+Shift+O): Pilih folder berisi image sequence
-- **Drag & Drop**: Drag file langsung ke aplikasi untuk menambah ke playlist
-
-### Playlist Management
-- **Add Files**: Tombol untuk menambah multiple file ke playlist
-- **Clear**: Bersihkan playlist
-- **Double-click**: Load file dari playlist
-- **File → Clear Playlist**: Clear semua item
-
-### Compare Mode
-- **View → Compare Mode** (Ctrl+T): Enable compare mode
-- **Checkbox**: Toggle compare mode di panel playlist
-- **Usage**: Pilih 2 item dari playlist untuk comparison side-by-side
-
-### Kontrol Playback
-- **Play/Pause**: Tombol ▶/⏸ atau Space
-- **Stop**: Tombol ⏹
-- **Previous Frame**: Tombol ⏮ atau Left Arrow
-- **Next Frame**: Tombol ⏭ atau Right Arrow
-- **Speed Control**: Slider untuk mengatur FPS (1-30)
-
-### Keyboard Shortcuts
-- `Space`: Play/Pause
-- `←` / `→`: Previous/Next frame
-- `Home`: Go to first frame
-- `End`: Go to last frame
-- `Page Up`: Jump backward 10 frames
-- `Page Down`: Jump forward 10 frames
-- `Ctrl+T`: Toggle compare mode
-
-### Timeline Navigation
-- Klik dan drag timeline slider untuk navigasi cepat
-- Lihat frame counter untuk posisi saat ini
-
-## Format File Didukung
-
-### Image Formats
-- JPEG (.jpg, .jpeg)
-- PNG (.png)
-- BMP (.bmp)
-- TIFF (.tiff, .tif)
-- GIF (.gif)
-
-### Video Formats
-- MP4 (.mp4)
-- AVI (.avi)
-- MOV (.mov)
-- MKV (.mkv)
-
-## Fitur Image Sequence
-
-Ketika memilih folder dengan image sequence:
-- File diurutkan secara natural (menangani penomoran dengan benar)
-- Playback speed dapat diatur 1-30 FPS
-- Frame counter menampilkan posisi frame saat ini
-- Timeline menampilkan total frame dalam sequence
-
-## Tips Penggunaan
-
-1. **Untuk Image Sequence**: Pastikan file dalam folder memiliki format penamaan yang konsisten (contoh: frame_001.jpg, frame_002.jpg, dst.)
-
-2. **Drag & Drop**: Drag multiple file sekaligus untuk menambah ke playlist dengan cepat
-
-3. **Playlist**: Gunakan playlist untuk mengelola multiple video dan switching cepat
-
-4. **Compare Mode**: 
-   - Enable compare mode terlebih dahulu
-   - Pilih exactly 2 item dari playlist (Ctrl+click)
-   - Double-click salah satu untuk load comparison
-   - Kontrol akan mempengaruhi kedua video bersamaan
-
-5. **Performance**: Untuk folder dengan ribuan gambar, loading mungkin membutuhkan waktu sejenak
-
-6. **Navigation**: Gunakan keyboard shortcuts untuk navigasi yang lebih cepat
-
-## Troubleshooting
-
-### Aplikasi tidak bisa dibuka
-- Pastikan Python 3.7+ terinstall
-- Install ulang dependencies: `pip install -r requirements.txt`
-
-### Video tidak bisa diputar (MP4/MOV)
-1. **Test video compatibility:**
+3. Compile the project:
    ```bash
-   python test_video.py
+   mkdir build && cd build
+   cmake ..
+   make
    ```
-   
-2. **Install codec tambahan:**
+4. Create an AppImage:
    ```bash
-   # Windows - install K-Lite Codec Pack
-   # atau install opencv dengan codec lengkap:
-   pip uninstall opencv-python
-   pip install opencv-python-headless
+   ./appimagetool-x86_64.AppImage .
    ```
-
-3. **Cek format video:**
-   - Pastikan codec didukung (H.264, MPEG-4)
-   - Coba convert video ke format standar
-   - Test dengan file video lain
-
-### Image tidak muncul
-- Pastikan format file didukung
-- Cek apakah file tidak corrupt
-
-### Playback tidak smooth
-- Kurangi FPS menggunakan speed control
-- Pastikan sistem memiliki RAM yang cukup
-- Close aplikasi lain yang menggunakan banyak memory
-
-## Requirements
-
-- Python 3.7+
-- PyQt5 5.15+
-- OpenCV 4.5+
-- NumPy 1.20+
+5. Your AppImage will be created in the current directory.
