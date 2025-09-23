@@ -1,4 +1,5 @@
 import os
+import time
 import cv2
 import numpy as np
 from PyQt5.QtWidgets import QLabel, QVBoxLayout, QWidget, QSizePolicy
@@ -26,6 +27,7 @@ class MediaPlayer(QWidget):
         self.is_video = False
         self.is_playing = False
         self.video_timer = QTimer()
+        self.video_timer.setTimerType(Qt.PreciseTimer)
         self.video_timer.timeout.connect(self.update_video_frame)
         self.fps = 30
         self.current_media_path = None
@@ -36,6 +38,7 @@ class MediaPlayer(QWidget):
         self.audio_player = QMediaPlayer(self) if enable_audio else None
         if self.audio_player:
             self.audio_player.setVolume(self._volume)
+        self.playback_start_time = None
 
     def setup_ui(self):
         layout = QVBoxLayout(self)
@@ -83,6 +86,12 @@ class MediaPlayer(QWidget):
         if force or abs(self.audio_player.position() - target_ms) > max(60, int(1000 / max(self.fps, 1))):
             self.audio_player.setPosition(target_ms)
 
+    def _reset_playback_clock(self):
+        if self.is_playing and self.fps > 0:
+            self.playback_start_time = time.monotonic() - (self.current_frame_index / self.fps)
+        elif not self.is_playing:
+            self.playback_start_time = None
+
     def set_volume(self, value):
         self._volume = max(0, min(100, int(value)))
         if self.audio_player:
@@ -118,6 +127,7 @@ class MediaPlayer(QWidget):
                     self.frameReady.emit()
                     self.current_media_path = file_path
                     self.has_finished = False # Reset penanda saat load media baru
+                    self.playback_start_time = None
                     self._prepare_audio(file_path)
                     return True
                 else:
@@ -138,6 +148,7 @@ class MediaPlayer(QWidget):
                 self.frameReady.emit()
                 self.current_media_path = file_path
                 self.has_finished = False # Reset penanda saat load media baru
+                self.playback_start_time = None
                 self._prepare_audio(None)
                 return True
         except Exception as e:
@@ -184,6 +195,7 @@ class MediaPlayer(QWidget):
         if self.is_playing:
             self.video_timer.stop()
             self.is_playing = False
+            self.playback_start_time = None
             if self.audio_player and self.audio_player.state() == QMediaPlayer.PlayingState:
                 self.audio_player.pause()
         else:
@@ -193,6 +205,10 @@ class MediaPlayer(QWidget):
                 interval = 41
             self.video_timer.start(interval)
             self.is_playing = True
+            if self.fps > 0:
+                self.playback_start_time = time.monotonic() - (self.current_frame_index / self.fps if self.current_frame_index >= 0 else 0)
+            else:
+                self.playback_start_time = time.monotonic()
             if self.audio_player and self.audio_player.mediaStatus() != QMediaPlayer.NoMedia:
                 self._sync_audio_to_current_frame(force=True)
                 self.audio_player.play()
@@ -201,6 +217,7 @@ class MediaPlayer(QWidget):
     def stop(self):
         if self.video_timer.isActive(): self.video_timer.stop()
         self.is_playing = False
+        self.playback_start_time = None
         if self.audio_player:
             self.audio_player.stop()
         if self.is_video and self.video_capture:
@@ -230,6 +247,7 @@ class MediaPlayer(QWidget):
                 self.frameIndexChanged.emit(self.current_frame_index, self.total_frames)
                 self.has_finished = False
                 self._sync_audio_to_current_frame()
+                self._reset_playback_clock()
         
     def next_frame(self):
         if not self.is_video or not self.video_capture: return
@@ -243,6 +261,7 @@ class MediaPlayer(QWidget):
                 self.frameIndexChanged.emit(self.current_frame_index, self.total_frames)
                 self.has_finished = False
                 self._sync_audio_to_current_frame()
+                self._reset_playback_clock()
         
     def seek_to_position(self, position):
         if not self.is_video or not self.video_capture: return
@@ -258,9 +277,40 @@ class MediaPlayer(QWidget):
                 self.frameIndexChanged.emit(self.current_frame_index, self.total_frames)
                 self.has_finished = False # Jika user seek, video belum selesai
                 self._sync_audio_to_current_frame(force=True)
+                self._reset_playback_clock()
                 
     def update_video_frame(self):
-        if not self.is_video or not self.video_capture or not self.is_playing: return
+        if not self.is_video or not self.video_capture or not self.is_playing:
+            return
+        if self.total_frames <= 0:
+            self.stop()
+            return
+
+        target_index = self.current_frame_index + 1
+        if self.fps > 0:
+            now = time.monotonic()
+            if self.playback_start_time is None:
+                self.playback_start_time = now - (self.current_frame_index / self.fps if self.current_frame_index >= 0 else 0)
+            elapsed = now - self.playback_start_time
+            expected_index = int(elapsed * self.fps)
+            if expected_index <= self.current_frame_index:
+                expected_index = self.current_frame_index + 1
+            target_index = min(expected_index, self.total_frames - 1)
+
+        if target_index >= self.total_frames:
+            self.video_timer.stop()
+            self.is_playing = False
+            self.has_finished = True
+            self.playback_start_time = None
+            if self.audio_player:
+                self.audio_player.stop()
+            self.playStateChanged.emit(False)
+            self.playbackFinished.emit()
+            return
+
+        if target_index > self.current_frame_index + 1:
+            self.video_capture.set(cv2.CAP_PROP_POS_FRAMES, target_index)
+
         ret, frame = self.video_capture.read()
         if ret:
             self.current_frame = frame
@@ -268,10 +318,13 @@ class MediaPlayer(QWidget):
             self.current_frame_index = int(self.video_capture.get(cv2.CAP_PROP_POS_FRAMES)) - 1
             self.display_frame(frame)
             self.frameIndexChanged.emit(self.current_frame_index, self.total_frames)
+            self._sync_audio_to_current_frame()
+            self._reset_playback_clock()
         else:
             self.video_timer.stop()
             self.is_playing = False
-            self.has_finished = True # Tandai video sudah selesai
+            self.has_finished = True
+            self.playback_start_time = None
             if self.audio_player:
                 self.audio_player.stop()
             self.playStateChanged.emit(False)
@@ -302,6 +355,7 @@ class MediaPlayer(QWidget):
         self.frameIndexChanged.emit(-1, 0)
         self.fpsChanged.emit(0.0)
         self.has_finished = False
+        self.playback_start_time = None
         self._prepare_audio(None)
 
     def dragEnterEvent(self, event: QDragEnterEvent):

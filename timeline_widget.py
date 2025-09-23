@@ -1,6 +1,6 @@
 from PyQt5.QtWidgets import QWidget, QMenu, QAction
 from PyQt5.QtCore import Qt, QPoint, pyqtSignal
-from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont
+from PyQt5.QtGui import QPainter, QPen, QBrush, QColor
 
 class TimelineWidget(QWidget):
     position_changed = pyqtSignal(int)
@@ -78,31 +78,6 @@ class TimelineWidget(QWidget):
             painter.setPen(QPen(QColor("#ffffff"), 2))
             painter.drawLine(int(marker_x), 0, int(marker_x), self.height())
             
-            font = QFont("Arial", 9)
-            painter.setFont(font)
-            painter.setPen(QColor("#ffffff"))
-            
-            if self.show_timecode and self.fps > 0:
-                current_seconds = self.current_position / self.fps
-                minutes = int(current_seconds // 60)
-                seconds = int(current_seconds % 60)
-                frames = int((current_seconds - int(current_seconds)) * self.fps)
-                frame_text = f"{minutes:02d}:{seconds:02d}.{frames:02d}"
-            else:
-                frame_text = str(self.current_position + 1)
-
-            text_rect = painter.fontMetrics().boundingRect(frame_text)
-            
-            text_x = int(marker_x) - text_rect.width() // 2
-            text_y = text_rect.height() + 2
-            
-            if text_x < 0:
-                text_x = 0
-            if text_x + text_rect.width() > self.width():
-                text_x = self.width() - text_rect.width()
-
-            painter.drawText(text_x, text_y, frame_text)
-
             painter.setPen(QPen(QColor("#ffffff"), 2))
             
             for mark_frame in self.marks:

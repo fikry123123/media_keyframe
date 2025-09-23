@@ -1,0 +1,12 @@
+venv/
+.venv/
+
+# Build artifacts
+dist/
+build/
+*.AppImage
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo

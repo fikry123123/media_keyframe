@@ -1,15 +1,16 @@
 import os
 import sys
 import glob
+import json
 import cv2
 import numpy as np
 from enum import Enum, auto
 from PyQt5.QtWidgets import (QMainWindow, QVBoxLayout, QWidget, QMenuBar, QAction, QMenu,
                             QFileDialog, QHBoxLayout, QStatusBar, QLabel, QSplitter,
                             QTreeWidget, QTreeWidgetItem, QPushButton, QShortcut, 
-                            QTreeWidgetItemIterator, QAbstractItemView)
+                            QTreeWidgetItemIterator, QAbstractItemView, QMessageBox)
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QMimeData
-from PyQt5.QtGui import QDragEnterEvent, QDropEvent, QKeySequence, QPixmap, QDrag
+from PyQt5.QtGui import QDragEnterEvent, QDropEvent, QKeySequence, QPixmap, QDrag, QColor
 from media_player import MediaPlayer
 from media_controls import MediaControls
 from timeline_widget import TimelineWidget
@@ -128,7 +129,7 @@ class PlaybackMode(Enum):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Studio Media Player")
+        self.setWindowTitle("Kenae Player")
         self.setGeometry(100, 100, 1200, 800)
         self.setStyleSheet("""
             QMainWindow { background-color: #2b2b2b; color: #ffffff; }
@@ -164,6 +165,7 @@ class MainWindow(QMainWindow):
         self.compare_timer.timeout.connect(self.update_compare_frames)
         self.setAcceptDrops(False)
         self.splitter_sizes = []
+        self.last_playlist_path = None
         self.setup_ui()
         self.set_playback_mode(PlaybackMode.LOOP)
 
@@ -198,6 +200,7 @@ class MainWindow(QMainWindow):
         self.playlist_widget.timeline_item = self.timeline_item
         self.source_item.setExpanded(True)
         self.timeline_item.setExpanded(True)
+        self.update_timeline_info_display(-1, 0)
         self.playlist_widget.itemDoubleClicked.connect(self.load_from_tree)
         playlist_layout.addWidget(self.playlist_widget)
         media_widget = QWidget()
@@ -211,6 +214,14 @@ class MainWindow(QMainWindow):
         media_layout.addWidget(self.media_container, 1)
         self.timeline = TimelineWidget()
         media_layout.addWidget(self.timeline)
+        info_layout = QHBoxLayout()
+        info_layout.setContentsMargins(12, 0, 12, 6)
+        info_layout.setSpacing(6)
+        self.timeline_info_label = QLabel("Frame: -- / --")
+        self.timeline_info_label.setStyleSheet("QLabel { color: #f5f5f5; font-weight: bold; }")
+        info_layout.addWidget(self.timeline_info_label)
+        info_layout.addStretch()
+        media_layout.addLayout(info_layout)
         self.controls = MediaControls()
         self.controls.set_compare_state(self.compare_mode)
         self.controls.set_volume(self.media_player.volume())
@@ -268,6 +279,7 @@ class MainWindow(QMainWindow):
                     new_item = QTreeWidgetItem(drop_folder, [os.path.basename(file_path)])
                     new_item.setData(0, Qt.UserRole, file_path)
                     new_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled | Qt.ItemIsEditable)
+                    new_item.setToolTip(0, file_path)
 
     def show_tree_context_menu(self, pos):
         item = self.playlist_widget.itemAt(pos)
@@ -314,6 +326,14 @@ class MainWindow(QMainWindow):
         self.open_folder_action.setShortcut('Ctrl+Shift+O')
         self.open_folder_action.triggered.connect(self.open_image_sequence)
         file_menu.addAction(self.open_folder_action)
+        save_playlist_action = QAction('Save Playlist', self)
+        save_playlist_action.setShortcut('Ctrl+S')
+        save_playlist_action.triggered.connect(self.save_playlist)
+        file_menu.addAction(save_playlist_action)
+        load_playlist_action = QAction('Load Playlist', self)
+        load_playlist_action.setShortcut('Ctrl+L')
+        load_playlist_action.triggered.connect(self.load_playlist)
+        file_menu.addAction(load_playlist_action)
         file_menu.addSeparator()
         clear_action = QAction('Clear Project', self)
         clear_action.triggered.connect(self.clear_project_tree)
@@ -400,13 +420,136 @@ class MainWindow(QMainWindow):
         folder_path = QFileDialog.getExistingDirectory(self, "Select Folder", "")
         if folder_path: pass
         
+    def save_playlist(self):
+        default_path = self.last_playlist_path or os.getcwd()
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Playlist",
+            default_path,
+            "Kenae Playlist (*.kenae)"
+        )
+        if not file_path:
+            return
+        if not file_path.lower().endswith(".kenae"):
+            file_path += ".kenae"
+        base_dir = os.path.dirname(file_path)
+        playlist_data = {
+            "version": 1,
+            "source": self._serialize_playlist_branch(self.source_item, base_dir),
+            "timeline": self._serialize_playlist_branch(self.timeline_item, base_dir),
+        }
+        try:
+            with open(file_path, "w", encoding="utf-8") as handle:
+                json.dump(playlist_data, handle, indent=2)
+        except OSError as exc:
+            QMessageBox.critical(self, "Save Playlist Failed", f"Tidak bisa menyimpan playlist:\n{exc}")
+            return
+        self.last_playlist_path = file_path
+        self.status_bar.showMessage(f"Playlist saved: {os.path.basename(file_path)}", 4000)
+
+    def load_playlist(self):
+        default_path = self.last_playlist_path or os.getcwd()
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Load Playlist",
+            default_path,
+            "Kenae Playlist (*.kenae)"
+        )
+        if not file_path:
+            return
+        try:
+            with open(file_path, "r", encoding="utf-8") as handle:
+                playlist_data = json.load(handle)
+        except (OSError, json.JSONDecodeError) as exc:
+            QMessageBox.critical(self, "Load Playlist Failed", f"Tidak bisa membuka playlist:\n{exc}")
+            return
+
+        self.clear_project_tree()
+        base_dir = os.path.dirname(file_path)
+        self._load_playlist_branch(self.source_item, playlist_data.get("source", []), base_dir)
+        self._load_playlist_branch(self.timeline_item, playlist_data.get("timeline", []), base_dir)
+        self.source_item.setExpanded(True)
+        self.timeline_item.setExpanded(True)
+        self.playlist_widget.expandAll()
+        self.last_playlist_path = file_path
+        missing = self._count_missing_entries(self.source_item) + self._count_missing_entries(self.timeline_item)
+        if missing:
+            self.status_bar.showMessage(f"Playlist loaded dengan {missing} file yang belum ditemukan", 5000)
+        else:
+            self.status_bar.showMessage(f"Playlist loaded: {os.path.basename(file_path)}", 4000)
+        self.update_playlist_item_indicator()
+
+    def _serialize_playlist_branch(self, parent_item, base_dir):
+        return [self._serialize_playlist_item(parent_item.child(i), base_dir) for i in range(parent_item.childCount())]
+
+    def _serialize_playlist_item(self, item, base_dir):
+        node = {"name": item.text(0)}
+        path = item.data(0, Qt.UserRole)
+        if path:
+            node["path"] = path
+            try:
+                node["relative_path"] = os.path.relpath(path, base_dir)
+            except ValueError:
+                pass
+        children = [self._serialize_playlist_item(item.child(i), base_dir) for i in range(item.childCount())]
+        if children:
+            node["children"] = children
+        return node
+
+    def _load_playlist_branch(self, parent_item, nodes, base_dir):
+        for node in nodes:
+            item = QTreeWidgetItem(parent_item, [node.get("name", "Untitled")])
+            resolved_path = self._resolve_playlist_path(node, base_dir)
+            if resolved_path:
+                item.setData(0, Qt.UserRole, resolved_path)
+                item.setToolTip(0, resolved_path)
+                if not os.path.exists(resolved_path):
+                    item.setForeground(0, QColor("#ff8a80"))
+            else:
+                item.setData(0, Qt.UserRole, None)
+            flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled | Qt.ItemIsEditable
+            if not resolved_path:
+                flags |= Qt.ItemIsDropEnabled
+            item.setFlags(flags)
+            children = node.get("children", [])
+            if children:
+                self._load_playlist_branch(item, children, base_dir)
+
+    def _resolve_playlist_path(self, node, base_dir):
+        candidates = []
+        relative = node.get("relative_path")
+        if relative:
+            candidates.append(os.path.abspath(os.path.join(base_dir, relative)))
+        path = node.get("path")
+        if path:
+            candidates.append(os.path.abspath(path))
+        seen = set()
+        for candidate in candidates:
+            if not candidate or candidate in seen:
+                continue
+            seen.add(candidate)
+            if os.path.exists(candidate):
+                return candidate
+        return candidates[0] if candidates else None
+
+    def _count_missing_entries(self, parent_item):
+        missing = 0
+        for i in range(parent_item.childCount()):
+            child = parent_item.child(i)
+            path = child.data(0, Qt.UserRole)
+            if path and not os.path.exists(path):
+                missing += 1
+            missing += self._count_missing_entries(child)
+        return missing
+        
     def add_files_to_source(self, file_paths):
         for path in file_paths:
             if os.path.exists(path) and not self.find_item_by_path_recursive(path, self.source_item):
                 item = QTreeWidgetItem(self.source_item, [os.path.basename(path)])
                 item.setData(0, Qt.UserRole, path)
                 item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled | Qt.ItemIsEditable)
-                
+                item.setToolTip(0, path)
+        
     def clear_project_tree(self):
         self.playlist_widget.clear()
         self.source_item = QTreeWidgetItem(self.playlist_widget, ["Source"])
@@ -477,14 +620,17 @@ class MainWindow(QMainWindow):
             self.update_composite_view()
             
     def update_frame_counter(self, current_frame, total_frames):
-        if self.compare_mode: return
+        if self.compare_mode:
+            return
         if total_frames <= 0:
             self.frame_counter_label.setText("No Media")
             self.timeline.set_duration(0)
+            self.update_timeline_info_display(-1, 0)
             return
         self.frame_counter_label.setText(f"Frame: {current_frame + 1} / {total_frames}")
         self.timeline.set_duration(total_frames)
         self.timeline.set_position(current_frame)
+        self.update_timeline_info_display(current_frame, total_frames, self.media_player_A_fps)
         
     def update_frame_counter_B(self, cf, tf): pass
     
@@ -663,6 +809,13 @@ class MainWindow(QMainWindow):
                 self.is_compare_playing = False
             self.media_player_2.clear_media()
             self.media_player.display_frame(self.media_player.current_frame)
+        if not self.compare_mode:
+            if self.media_player.total_frames > 0:
+                self.update_timeline_info_display(self.media_player.current_frame_index, self.media_player.total_frames, self.media_player_A_fps)
+            else:
+                self.update_timeline_info_display(-1, 0)
+        elif not (self.media_player.has_media() or self.media_player_2.has_media()):
+            self.update_timeline_info_display(-1, 0)
         self.update_playlist_item_indicator()
             
     def update_composite_view(self):
@@ -672,7 +825,13 @@ class MainWindow(QMainWindow):
         current_f = self.media_player.current_frame_index if self.media_player.has_media() else self.media_player_2.current_frame_index
         self.timeline.set_duration(total_f)
         self.timeline.set_position(current_f)
-        self.frame_counter_label.setText(f"Frame: {current_f + 1} / {total_f}")
+        if total_f > 0 and current_f >= 0:
+            self.frame_counter_label.setText(f"Frame: {current_f + 1} / {total_f}")
+            fps_ref = self.media_player_A_fps if self.media_player_A_fps > 0 else self.media_player_B_fps
+            self.update_timeline_info_display(current_f, total_f, fps_ref)
+        else:
+            self.frame_counter_label.setText("No Media")
+            self.update_timeline_info_display(-1, 0)
         h_a, w_a = (frame_a.shape[0], frame_a.shape[1]) if frame_a is not None else (480, 640)
         h_b, w_b = (frame_b.shape[0], frame_b.shape[1]) if frame_b is not None else (480, 640)
         if frame_a is None: frame_a = self.create_placeholder_frame("View A", w_a, h_a)
@@ -717,6 +876,34 @@ class MainWindow(QMainWindow):
             text_a = f"A: {self.media_player_A_fps:.2f} FPS"
             text_b = f"B: {self.media_player_B_fps:.2f} FPS"
             self.fps_label.setText(f"{text_a} | {text_b}")
+
+    def update_timeline_info_display(self, current_frame, total_frames, fps=0.0):
+        if not hasattr(self, 'timeline_info_label'):
+            return
+        if current_frame is None or current_frame < 0 or total_frames <= 0:
+            self.timeline_info_label.setText("Frame: -- / --")
+            return
+        fps = fps or 0.0
+        if self.show_timecode and fps > 0:
+            total_seconds = current_frame / fps
+            minutes = int(total_seconds // 60)
+            seconds_float = total_seconds - minutes * 60
+            seconds = int(seconds_float)
+            fractional = seconds_float - seconds
+            frames = int(round(fractional * fps))
+            if frames >= fps:
+                frames = 0
+                seconds += 1
+                if seconds >= 60:
+                    seconds = 0
+                    minutes += 1
+            text = (
+                f"Time {minutes:02d}:{seconds:02d}.{frames:02d}  "
+                f"(Frame {current_frame + 1:,} / {total_frames:,})"
+            )
+        else:
+            text = f"Frame {current_frame + 1:,} / {total_frames:,}"
+        self.timeline_info_label.setText(text)
             
     def go_to_first_frame(self):
         if self.media_player.is_playing or self.is_compare_playing:
@@ -775,6 +962,8 @@ class MainWindow(QMainWindow):
     def set_time_display_mode(self, show_timecode):
         self.show_timecode = show_timecode
         self.timeline.set_timecode_mode(show_timecode)
+        fps_ref = self.media_player_A_fps if (self.media_player_A_fps > 0 or not self.compare_mode) else self.media_player_B_fps
+        self.update_timeline_info_display(self.timeline.current_position, self.timeline.duration, fps_ref)
         
     def toggle_playlist_panel(self):
         if self.playlist_widget_container.isVisible():
