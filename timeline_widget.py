@@ -1,6 +1,6 @@
 from PyQt5.QtWidgets import QWidget, QMenu, QAction
 from PyQt5.QtCore import Qt, QPoint, pyqtSignal
-from PyQt5.QtGui import QPainter, QPen, QBrush, QColor
+from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont
 
 class TimelineWidget(QWidget):
     position_changed = pyqtSignal(int)
@@ -17,7 +17,7 @@ class TimelineWidget(QWidget):
         self.marks = []
         self.fps = 0.0
         self.show_timecode = False
-        self.setFixedHeight(30)
+        self.setFixedHeight(44)
         self.setStyleSheet("""
             QWidget {
                 background-color: #3a3a3a;
@@ -76,17 +76,40 @@ class TimelineWidget(QWidget):
             marker_x = (self.current_position / (self.duration - 1)) * self.width() if self.duration > 1 else 0
 
             painter.setPen(QPen(QColor("#ffffff"), 2))
-            painter.drawLine(int(marker_x), 0, int(marker_x), self.height())
-            
+            painter.drawLine(int(marker_x), 10, int(marker_x), self.height())
+
+            display_text = self._format_marker_label()
+            if display_text:
+                font = QFont("Segoe UI", 9, QFont.Bold)
+                painter.setFont(font)
+                metrics = painter.fontMetrics()
+                text_width = metrics.horizontalAdvance(display_text)
+                text_height = metrics.height()
+                bubble_padding = 8
+                bubble_width = text_width + bubble_padding * 2
+                bubble_height = text_height + 6
+                bubble_x = int(marker_x) - bubble_width // 2
+                bubble_y = 2
+                if bubble_x < 4:
+                    bubble_x = 4
+                if bubble_x + bubble_width > self.width() - 4:
+                    bubble_x = self.width() - bubble_width - 4
+
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QColor(20, 20, 20, 220))
+                painter.drawRoundedRect(bubble_x, bubble_y, bubble_width, bubble_height, 6, 6)
+                painter.setPen(QColor("#ffffff"))
+                painter.drawText(bubble_x, bubble_y, bubble_width, bubble_height,
+                                 Qt.AlignCenter | Qt.AlignVCenter, display_text)
+
             painter.setPen(QPen(QColor("#ffffff"), 2))
-            
+
             for mark_frame in self.marks:
                 if self.duration > 1:
                     mark_x = (mark_frame / (self.duration - 1)) * self.width()
                 else:
                     mark_x = 0
-                
-                painter.drawLine(int(mark_x), 0, int(mark_x), self.height())
+                painter.drawLine(int(mark_x), 10, int(mark_x), self.height())
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -106,3 +129,26 @@ class TimelineWidget(QWidget):
             
             new_position = max(0, min(new_position, self.duration - 1))
             self.position_changed.emit(new_position)
+
+    def _format_marker_label(self):
+        if self.duration <= 0 or self.current_position < 0:
+            return ""
+        frame_current = self.current_position + 1
+        frame_total = self.duration
+        frame_text = f"{frame_current:,} / {frame_total:,}"
+        if self.show_timecode and self.fps > 0:
+            total_seconds = self.current_position / self.fps
+            minutes = int(total_seconds // 60)
+            seconds_float = total_seconds - minutes * 60
+            seconds = int(seconds_float)
+            fractional = seconds_float - seconds
+            frames = int(round(fractional * self.fps))
+            if frames >= self.fps:
+                frames = 0
+                seconds += 1
+                if seconds >= 60:
+                    seconds = 0
+                    minutes += 1
+            time_text = f"{minutes:02d}:{seconds:02d}.{frames:02d}"
+            return f"{time_text}  ({frame_text})"
+        return frame_text

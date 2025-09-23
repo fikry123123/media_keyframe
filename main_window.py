@@ -87,8 +87,11 @@ class ProjectTreeWidget(QTreeWidget):
             files = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
             if files:
                 target = self.itemAt(event.pos())
-                self.filesDroppedOnTarget.emit(files, target)
-            event.accept()
+                if target:
+                    self.filesDroppedOnTarget.emit(files, target)
+                    event.accept()
+                else:
+                    event.ignore()
             return
 
         if event.mimeData().hasFormat("application/x-playlist-paths"):
@@ -200,7 +203,6 @@ class MainWindow(QMainWindow):
         self.playlist_widget.timeline_item = self.timeline_item
         self.source_item.setExpanded(True)
         self.timeline_item.setExpanded(True)
-        self.update_timeline_info_display(-1, 0)
         self.playlist_widget.itemDoubleClicked.connect(self.load_from_tree)
         playlist_layout.addWidget(self.playlist_widget)
         media_widget = QWidget()
@@ -214,14 +216,6 @@ class MainWindow(QMainWindow):
         media_layout.addWidget(self.media_container, 1)
         self.timeline = TimelineWidget()
         media_layout.addWidget(self.timeline)
-        info_layout = QHBoxLayout()
-        info_layout.setContentsMargins(12, 0, 12, 6)
-        info_layout.setSpacing(6)
-        self.timeline_info_label = QLabel("Frame: -- / --")
-        self.timeline_info_label.setStyleSheet("QLabel { color: #f5f5f5; font-weight: bold; }")
-        info_layout.addWidget(self.timeline_info_label)
-        info_layout.addStretch()
-        media_layout.addLayout(info_layout)
         self.controls = MediaControls()
         self.controls.set_compare_state(self.compare_mode)
         self.controls.set_volume(self.media_player.volume())
@@ -625,12 +619,10 @@ class MainWindow(QMainWindow):
         if total_frames <= 0:
             self.frame_counter_label.setText("No Media")
             self.timeline.set_duration(0)
-            self.update_timeline_info_display(-1, 0)
             return
         self.frame_counter_label.setText(f"Frame: {current_frame + 1} / {total_frames}")
         self.timeline.set_duration(total_frames)
         self.timeline.set_position(current_frame)
-        self.update_timeline_info_display(current_frame, total_frames, self.media_player_A_fps)
         
     def update_frame_counter_B(self, cf, tf): pass
     
@@ -809,13 +801,6 @@ class MainWindow(QMainWindow):
                 self.is_compare_playing = False
             self.media_player_2.clear_media()
             self.media_player.display_frame(self.media_player.current_frame)
-        if not self.compare_mode:
-            if self.media_player.total_frames > 0:
-                self.update_timeline_info_display(self.media_player.current_frame_index, self.media_player.total_frames, self.media_player_A_fps)
-            else:
-                self.update_timeline_info_display(-1, 0)
-        elif not (self.media_player.has_media() or self.media_player_2.has_media()):
-            self.update_timeline_info_display(-1, 0)
         self.update_playlist_item_indicator()
             
     def update_composite_view(self):
@@ -827,11 +812,8 @@ class MainWindow(QMainWindow):
         self.timeline.set_position(current_f)
         if total_f > 0 and current_f >= 0:
             self.frame_counter_label.setText(f"Frame: {current_f + 1} / {total_f}")
-            fps_ref = self.media_player_A_fps if self.media_player_A_fps > 0 else self.media_player_B_fps
-            self.update_timeline_info_display(current_f, total_f, fps_ref)
         else:
             self.frame_counter_label.setText("No Media")
-            self.update_timeline_info_display(-1, 0)
         h_a, w_a = (frame_a.shape[0], frame_a.shape[1]) if frame_a is not None else (480, 640)
         h_b, w_b = (frame_b.shape[0], frame_b.shape[1]) if frame_b is not None else (480, 640)
         if frame_a is None: frame_a = self.create_placeholder_frame("View A", w_a, h_a)
@@ -877,33 +859,6 @@ class MainWindow(QMainWindow):
             text_b = f"B: {self.media_player_B_fps:.2f} FPS"
             self.fps_label.setText(f"{text_a} | {text_b}")
 
-    def update_timeline_info_display(self, current_frame, total_frames, fps=0.0):
-        if not hasattr(self, 'timeline_info_label'):
-            return
-        if current_frame is None or current_frame < 0 or total_frames <= 0:
-            self.timeline_info_label.setText("Frame: -- / --")
-            return
-        fps = fps or 0.0
-        if self.show_timecode and fps > 0:
-            total_seconds = current_frame / fps
-            minutes = int(total_seconds // 60)
-            seconds_float = total_seconds - minutes * 60
-            seconds = int(seconds_float)
-            fractional = seconds_float - seconds
-            frames = int(round(fractional * fps))
-            if frames >= fps:
-                frames = 0
-                seconds += 1
-                if seconds >= 60:
-                    seconds = 0
-                    minutes += 1
-            text = (
-                f"Time {minutes:02d}:{seconds:02d}.{frames:02d}  "
-                f"(Frame {current_frame + 1:,} / {total_frames:,})"
-            )
-        else:
-            text = f"Frame {current_frame + 1:,} / {total_frames:,}"
-        self.timeline_info_label.setText(text)
             
     def go_to_first_frame(self):
         if self.media_player.is_playing or self.is_compare_playing:
@@ -962,8 +917,6 @@ class MainWindow(QMainWindow):
     def set_time_display_mode(self, show_timecode):
         self.show_timecode = show_timecode
         self.timeline.set_timecode_mode(show_timecode)
-        fps_ref = self.media_player_A_fps if (self.media_player_A_fps > 0 or not self.compare_mode) else self.media_player_B_fps
-        self.update_timeline_info_display(self.timeline.current_position, self.timeline.duration, fps_ref)
         
     def toggle_playlist_panel(self):
         if self.playlist_widget_container.isVisible():
