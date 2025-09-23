@@ -2,8 +2,8 @@ import os
 import cv2
 import numpy as np
 from PyQt5.QtWidgets import QLabel, QVBoxLayout, QWidget
-from PyQt5.QtCore import Qt, pyqtSignal, QTimer
-from PyQt5.QtGui import QPixmap, QImage
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QMimeData
+from PyQt5.QtGui import QPixmap, QImage, QDragEnterEvent, QDropEvent
 
 class MediaPlayer(QWidget):
     frameIndexChanged = pyqtSignal(int, int)
@@ -11,9 +11,13 @@ class MediaPlayer(QWidget):
     playStateChanged = pyqtSignal(bool)
     fpsChanged = pyqtSignal(float)
     playbackFinished = pyqtSignal()
+    # Sinyal baru untuk menangani file yang di-drop
+    fileDropped = pyqtSignal(str, str) # file_path, target_view ('A' or 'B')
     
     def __init__(self):
         super().__init__()
+        # Mengaktifkan fungsionalitas drop pada widget ini
+        self.setAcceptDrops(True)
         self.setup_ui()
         self.current_frame = None
         self.displayed_frame_source = None
@@ -225,3 +229,37 @@ class MediaPlayer(QWidget):
         self.video_label.setPixmap(QPixmap())
         self.frameIndexChanged.emit(-1, 0)
         self.fpsChanged.emit(0.0)
+
+    # --- AWAL DARI FUNGSI BARU UNTUK DRAG & DROP ---
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        # Menerima event jika data yang di-drag berisi URL (file dari luar)
+        # atau format kustom dari playlist internal
+        if event.mimeData().hasUrls() or event.mimeData().hasFormat("application/x-playlist-paths"):
+            event.acceptProposedAction()
+    
+    def dropEvent(self, event: QDropEvent):
+        file_path = None
+        # Jika dari luar aplikasi (file)
+        if event.mimeData().hasUrls():
+            # Ambil path file pertama
+            url = event.mimeData().urls()[0]
+            if url.isLocalFile():
+                file_path = url.toLocalFile()
+        # Jika dari playlist internal
+        elif event.mimeData().hasFormat("application/x-playlist-paths"):
+            paths_data = event.mimeData().data("application/x-playlist-paths")
+            paths = str(paths_data, 'utf-8').split(',')
+            if paths:
+                file_path = paths[0]
+        
+        if file_path:
+            # Tentukan target A atau B berdasarkan posisi drop di panel
+            pos = event.pos()
+            target_view = 'A'
+            if pos.x() > self.width() / 2:
+                target_view = 'B'
+            
+            # Kirim sinyal ke MainWindow untuk menangani logika pemuatan file
+            self.fileDropped.emit(file_path, target_view)
+            event.acceptProposedAction()
+    # --- AKHIR DARI FUNGSI BARU ---
