@@ -1,8 +1,9 @@
+import os
+import cv2
+import numpy as np
 from PyQt5.QtWidgets import QLabel, QVBoxLayout, QWidget
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtGui import QPixmap, QImage
-import cv2
-import numpy as np
 
 class MediaPlayer(QWidget):
     frameIndexChanged = pyqtSignal(int, int)
@@ -47,6 +48,12 @@ class MediaPlayer(QWidget):
         
     def load_media(self, file_path):
         self.clear_media()
+        if not file_path or not os.path.exists(file_path):
+            self.video_label.setText("Load media for this view...")
+            self.frameIndexChanged.emit(-1, 0)
+            self.fpsChanged.emit(0.0)
+            return False
+            
         self.current_media_path = None
         try:
             cap = cv2.VideoCapture(file_path)
@@ -122,7 +129,6 @@ class MediaPlayer(QWidget):
             self.video_timer.stop()
             self.is_playing = False
         else:
-            # PERUBAHAN: Logika untuk seek ke awal dipindahkan ke MainWindow
             if self.fps > 0:
                 interval = int(1000 / self.fps)
             else:

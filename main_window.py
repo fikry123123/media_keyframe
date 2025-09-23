@@ -15,6 +15,7 @@ from timeline_widget import TimelineWidget
 class PlaybackMode(Enum):
     LOOP = auto()
     PLAY_NEXT = auto()
+    PLAY_ONCE = auto()
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -226,6 +227,9 @@ class MainWindow(QMainWindow):
         if self.playback_mode == PlaybackMode.LOOP:
             self.playback_mode = PlaybackMode.PLAY_NEXT
             self.controls.set_playback_mode_state("⤵️", "Playback Mode: Play Next in Playlist")
+        elif self.playback_mode == PlaybackMode.PLAY_NEXT:
+            self.playback_mode = PlaybackMode.PLAY_ONCE
+            self.controls.set_playback_mode_state("➡️|", "Playback Mode: Play Once")
         else:
             self.playback_mode = PlaybackMode.LOOP
             self.controls.set_playback_mode_state("🔁", "Playback Mode: Loop (Repeat Automatically)")
@@ -236,6 +240,8 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(50, self.toggle_play)
         elif self.playback_mode == PlaybackMode.PLAY_NEXT:
             self.play_next_playlist_item()
+        elif self.playback_mode == PlaybackMode.PLAY_ONCE:
+            return
 
     def open_file(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Open Media File", "", "Media Files (*.mp4 *.avi *.mov *.mkv *.jpg *.jpeg *.png *.bmp *.tiff);;All Files (*)")
@@ -275,6 +281,19 @@ class MainWindow(QMainWindow):
             self.controls.compare_button.setEnabled(False)
 
     def toggle_play(self):
+        is_paused_at_end = False
+        if self.image_sequence_files:
+            if (not hasattr(self, 'sequence_timer') or not self.sequence_timer.isActive()) \
+               and self.image_sequence_files and self.current_sequence_index >= len(self.image_sequence_files) - 1:
+                is_paused_at_end = True
+        else:
+            if self.media_player.has_media() and not self.media_player.is_playing \
+               and self.media_player.total_frames > 0 and self.media_player.current_frame_index >= self.media_player.total_frames - 1:
+                is_paused_at_end = True
+
+        if is_paused_at_end:
+            self.seek_to_position(0)
+
         if self.image_sequence_files:
             if not hasattr(self, 'sequence_timer'):
                 self.sequence_timer = QTimer()
@@ -481,24 +500,57 @@ class MainWindow(QMainWindow):
             if not file_path:
                 event.ignore()
                 return
+            
+            # Dropping from playlist into compare view
             if self.compare_mode:
-                if not self.media_player.has_media(): self.load_single_file(file_path)
-                else: self.load_media_into_player_b(file_path)
-            else: self.load_single_file(file_path)
+                media_container_pos = self.media_container.mapFromGlobal(self.mapToGlobal(event.pos()))
+                if self.media_container.rect().contains(media_container_pos) and media_container_pos.x() < self.media_container.width() / 2:
+                     # Target A
+                    path_b = self.media_player_2.get_current_file_path()
+                    self.load_compare_files(file_path, path_b)
+                else:
+                    # Target B
+                    path_a = self.media_player.get_current_file_path()
+                    self.load_compare_files(path_a, file_path)
+            else:
+                 self.load_single_file(file_path)
             event.accept()
             return
 
-        if event.mimeData().hasUrls():
-            files = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
-            if files:
-                self.add_files_to_playlist_from_paths(files)
-                file_to_load = files[0]
-                if self.compare_mode:
-                    if not self.media_player.has_media(): self.load_single_file(file_to_load)
-                    else: self.load_media_into_player_b(file_to_load)
-                else: self.load_single_file(file_to_load)
-                event.acceptProposedAction()
-        else: event.ignore()
+        if not event.mimeData().hasUrls():
+            event.ignore()
+            return
+
+        files = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
+        if not files:
+            event.ignore()
+            return
+
+        self.add_files_to_playlist_from_paths(files)
+        file_to_load = files[0]
+
+        if self.compare_mode:
+            media_container_pos = self.media_container.mapFromGlobal(self.mapToGlobal(event.pos()))
+            
+            target_is_A = False
+            if self.media_container.rect().contains(media_container_pos):
+                if media_container_pos.x() < self.media_container.width() / 2:
+                    target_is_A = True
+            
+            if target_is_A:
+                path_b = self.media_player_2.get_current_file_path()
+                self.load_compare_files(file_to_load, path_b)
+            else:
+                path_a = self.media_player.get_current_file_path()
+                if path_a:
+                    self.load_compare_files(path_a, file_to_load)
+                else:
+                    self.load_single_file(file_to_load)
+        else:
+            self.load_single_file(file_to_load)
+        
+        event.acceptProposedAction()
+
 
     def add_files_to_playlist_from_paths(self, file_paths):
         for file_path in file_paths:
@@ -552,12 +604,18 @@ class MainWindow(QMainWindow):
         self.marks = []
         self.media_player.load_media(file1)
         self.media_player_2.load_media(file2)
-        self.status_bar.showMessage(f"Comparing: {os.path.basename(file1)} vs {os.path.basename(file2)}")
+
+        f1_name = os.path.basename(file1) if file1 else "Empty"
+        f2_name = os.path.basename(file2) if file2 else "Empty"
+        self.status_bar.showMessage(f"Comparing: {f1_name} vs {f2_name}")
+        
         self.reset_playlist_indicators()
-        self.update_playlist_item_indicator(file1, "A")
-        self.update_playlist_item_indicator(file2, "B")
+        if file1: self.update_playlist_item_indicator(file1, "A")
+        if file2: self.update_playlist_item_indicator(file2, "B")
+        
         self.timeline.set_marks(self.marks)
         QTimer.singleShot(50, self.update_composite_view)
+
 
     def sync_playlist_data(self):
         new_playlist_order = []
@@ -639,7 +697,7 @@ class MainWindow(QMainWindow):
             composite_frame = cv2.hconcat([placeholder_a, placeholder_b])
         else:
             if frame_a is None:
-                ref_h, ref_w = frame_b.shape[:2]
+                ref_h, ref_w = frame_b.shape[:2] if frame_b is not None else (480, 640)
                 frame_a = self.create_placeholder_frame("Load Media for A", ref_w, ref_h)
             if frame_b is None:
                 ref_h, ref_w = frame_a.shape[:2]
@@ -647,12 +705,12 @@ class MainWindow(QMainWindow):
 
             h_a, w_a, _ = frame_a.shape
             h_b, w_b, _ = frame_b.shape
-            target_h = min(h_a, h_b)
+            target_h = min(h_a, h_b) if h_a > 0 and h_b > 0 else 480
             if target_h <= 0:
                 return
 
-            new_w_a = int(w_a * (target_h / h_a))
-            new_w_b = int(w_b * (target_h / h_b))
+            new_w_a = int(w_a * (target_h / h_a)) if h_a > 0 else 0
+            new_w_b = int(w_b * (target_h / h_b)) if h_b > 0 else 0
             frame_a_resized = cv2.resize(frame_a, (new_w_a, target_h), interpolation=cv2.INTER_AREA)
             frame_b_resized = cv2.resize(frame_b, (new_w_b, target_h), interpolation=cv2.INTER_AREA)
 
