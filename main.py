@@ -18,17 +18,17 @@ from main_window import MainWindow
 
 def main():
     """Main application entry point"""
+    # Enable high DPI scaling before creating QApplication
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+    
     # Create QApplication
     app = QApplication(sys.argv)
     
     # Set application properties
-    app.setApplicationName("Studio Media Player")
+    app.setApplicationName("kenae Media Player")
     app.setApplicationVersion("1.0.0")
-    app.setOrganizationName("Studio Media Tools")
-    
-    # Enable high DPI scaling
-    app.setAttribute(Qt.AA_EnableHighDpiScaling, True)
-    app.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+    app.setOrganizationName("kenae Media Tools")
     
     # Create and show main window
     window = MainWindow()
