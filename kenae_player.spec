@@ -10,9 +10,9 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=['tests', 'test_video'],
     noarchive=False,
-    optimize=0,
+    optimize=1,
 )
 pyz = PYZ(a.pure)
 
@@ -24,8 +24,8 @@ exe = EXE(
     name='kenae_player',
     debug=False,
     bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,
+    strip=True,
+    upx=False,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -37,8 +37,8 @@ coll = COLLECT(
     exe,
     a.binaries,
     a.datas,
-    strip=False,
-    upx=True,
+    strip=True,
+    upx=False,
     upx_exclude=[],
     name='kenae_player',
 )
