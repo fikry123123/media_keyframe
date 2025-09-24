@@ -182,13 +182,10 @@ class MainWindow(QMainWindow):
         
         self.is_mark_tour_active = False
         self.current_mark_tour_index = 0
-        self.MARK_TOUR_FRAME_DURATION = 1500 
+        self.mark_tour_speed_ms = 1500 
         self.mark_tour_timer = QTimer(self)
+        self.mark_tour_timer.setTimerType(Qt.PreciseTimer)
         self.mark_tour_timer.setSingleShot(True) 
-
-        self.is_fast_jumping = False
-        self.fast_jump_index = 0
-        self.fast_jump_timer = QTimer(self)
 
         self.setup_ui()
         self.set_playback_mode(PlaybackMode.LOOP)
@@ -263,6 +260,7 @@ class MainWindow(QMainWindow):
         self.controls.volume_changed.connect(self.handle_volume_change)
         self.timeline.position_changed.connect(self.seek_to_position)
         self.timeline.display_mode_changed.connect(self.set_time_display_mode)
+        self.timeline.markTourSpeedChanged.connect(self.set_mark_tour_speed)
         self.media_player.frameIndexChanged.connect(self.update_frame_counter)
         self.media_player.playStateChanged.connect(self.controls.set_play_state)
         self.media_player.playbackFinished.connect(self.handle_playback_finished)
@@ -274,7 +272,6 @@ class MainWindow(QMainWindow):
         self.playlist_widget.treeChanged.connect(self.update_total_duration)
         self.playlist_widget.itemClicked.connect(self.on_tree_item_clicked)
         self.mark_tour_timer.timeout.connect(self.advance_mark_tour)
-        self.fast_jump_timer.timeout.connect(self.advance_fast_jump)
 
     def setup_shortcuts(self):
         QShortcut(QKeySequence(Qt.Key_Space), self).activated.connect(self.toggle_play)
@@ -292,7 +289,6 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Shift+]"), self).activated.connect(self.jump_and_play_next_mark)
         QShortcut(QKeySequence("Shift+["), self).activated.connect(self.jump_and_play_previous_mark)
         QShortcut(QKeySequence("Ctrl+Shift+P"), self).activated.connect(self.toggle_mark_tour)
-        QShortcut(QKeySequence("Ctrl+Shift+J"), self).activated.connect(self.toggle_fast_mark_jump)
 
     def handle_files_dropped(self, file_paths, target_item):
         self.add_files_to_source(file_paths)
@@ -473,16 +469,23 @@ class MainWindow(QMainWindow):
         clear_action = QAction('Clear Project', self)
         clear_action.triggered.connect(self.clear_project_tree)
         file_menu.addAction(clear_action)
+        
         view_menu = menubar.addMenu('View')
         self.compare_action = QAction('Compare Mode', self)
         self.compare_action.setCheckable(True)
         self.compare_action.setShortcut('Ctrl+T')
         self.compare_action.triggered.connect(lambda: self.toggle_compare_mode(self.compare_action.isChecked()))
         view_menu.addAction(self.compare_action)
+        
         self.hide_playlist_action = QAction("Hide Project Panel", self)
         self.hide_playlist_action.setShortcut('Ctrl+H')
         self.hide_playlist_action.triggered.connect(self.toggle_playlist_panel)
         view_menu.addAction(self.hide_playlist_action)
+        
+        view_menu.addSeparator()
+        show_shortcuts_action = QAction("View Shortcuts...", self)
+        show_shortcuts_action.triggered.connect(self.show_shortcuts_dialog)
+        view_menu.addAction(show_shortcuts_action)
         
     def create_status_bar(self):
         self.status_bar = QStatusBar()
@@ -505,6 +508,45 @@ class MainWindow(QMainWindow):
         self.status_bar.setStyleSheet("QStatusBar { font-size: 12px; font-weight: bold; }")
         self.status_bar.showMessage("Ready")
         
+    def show_shortcuts_dialog(self):
+        shortcuts_text = """
+            <h3>Playback</h3>
+            <b>Space</b>: Play / Pause<br>
+            <b>Right Arrow</b>: Next Frame<br>
+            <b>Left Arrow</b>: Previous Frame<br>
+            <b>Home</b>: Go to First Frame<br>
+            <b>End</b>: Go to Last Frame<br>
+
+            <h3>Timeline Navigation</h3>
+            <b>Ctrl + Down Arrow</b>: Play Next Item in Timeline<br>
+            <b>Ctrl + Up Arrow</b>: Play Previous Item in Timeline<br>
+
+            <h3>Marking</h3>
+            <b>F</b>: Toggle Mark at Current Frame<br>
+            <b>Ctrl + Shift + M</b>: Clear All Marks<br>
+            <b>]</b>: Jump to Next Mark<br>
+            <b>[</b>: Jump to Previous Mark<br>
+            <b>Shift + ]</b>: Jump and Play to Next Mark<br>
+            <b>Shift + [</b>: Jump and Play to Previous Mark<br>
+            <b>L</b>: Toggle Loop for Marked Range<br>
+            <b>Ctrl + Shift + P</b>: Start / Stop Mark Tour (Looping)<br>
+
+            <h3>File</h3>
+            <b>Ctrl + O</b>: Open File<br>
+            <b>Ctrl + Shift + O</b>: Open Image Sequence<br>
+            <b>Ctrl + S</b>: Save Playlist<br>
+            <b>Ctrl + L</b>: Load Playlist<br>
+
+            <h3>View</h3>
+            <b>Ctrl + T</b>: Toggle Compare Mode<br>
+            <b>Ctrl + H</b>: Show / Hide Project Panel<br>
+        """
+        QMessageBox.information(
+            self,
+            "Keyboard Shortcuts",
+            shortcuts_text
+        )
+
     def handle_file_drop_on_player(self, file_path, target_view):
         self.add_files_to_source([file_path])
         self.update_total_duration()
@@ -768,7 +810,6 @@ class MainWindow(QMainWindow):
         
     def toggle_play(self):
         if self.is_mark_tour_active: self.toggle_mark_tour()
-        if self.is_fast_jumping: self.toggle_fast_mark_jump()
         
         if self.compare_mode:
             if self.is_compare_playing:
@@ -817,7 +858,6 @@ class MainWindow(QMainWindow):
             
     def seek_to_position(self, position):
         if self.is_mark_tour_active: self.toggle_mark_tour()
-        if self.is_fast_jumping: self.toggle_fast_mark_jump()
         self.media_player.seek_to_position(position)
         if self.compare_mode:
             self.media_player_2.seek_to_position(position)
@@ -893,8 +933,6 @@ class MainWindow(QMainWindow):
     def toggle_mark_tour(self):
         if self.is_mark_tour_active:
             self.is_mark_tour_active = False
-            if self.media_player.is_playing:
-                self.toggle_play()
             self.mark_tour_timer.stop()
             self.status_bar.showMessage("Mark tour stopped.", 3000)
         else:
@@ -910,13 +948,11 @@ class MainWindow(QMainWindow):
 
             self.is_mark_tour_active = True
             self.current_mark_tour_index = 0
-            self.status_bar.showMessage("Mark tour (Slideshow) started. Press Ctrl+Shift+P to stop.", 5000)
+            self.status_bar.showMessage("Mark tour started (looping). Press Ctrl+Shift+P to stop.", 5000)
             self.show_current_mark_frame()
 
     def show_current_mark_frame(self):
-        if not self.is_mark_tour_active or self.current_mark_tour_index >= len(self.marks):
-            if self.is_mark_tour_active:
-                self.toggle_mark_tour() 
+        if not self.is_mark_tour_active or not self.marks:
             return
 
         if self.media_player.is_playing:
@@ -925,51 +961,24 @@ class MainWindow(QMainWindow):
         target_frame = self.marks[self.current_mark_tour_index]
         self.media_player.seek_to_position(target_frame)
         
-        self.mark_tour_timer.start(self.MARK_TOUR_FRAME_DURATION)
+        self.mark_tour_timer.start(self.mark_tour_speed_ms)
 
     def advance_mark_tour(self):
         if not self.is_mark_tour_active:
             return
         
         self.current_mark_tour_index += 1
+        if self.current_mark_tour_index >= len(self.marks):
+            self.current_mark_tour_index = 0
+        
         self.show_current_mark_frame()
 
-    def toggle_fast_mark_jump(self):
-        if self.is_fast_jumping:
-            self.is_fast_jumping = False
-            self.fast_jump_timer.stop()
-            self.status_bar.showMessage("Fast jump stopped.", 3000)
-        else:
-            if not self.marks:
-                self.status_bar.showMessage("No marks to jump through.", 3000)
-                return
-            
-            if self.media_player.is_playing:
-                self.toggle_play()
-
-            self.is_fast_jumping = True
-            self.fast_jump_index = 0
-            self.status_bar.showMessage("Fast jump started. Press Ctrl+Shift+J to stop.", 5000)
-            first_mark = self.marks[self.fast_jump_index]
-            self.media_player.seek_to_position(first_mark)
-            self.fast_jump_timer.start(100)
-
-    def advance_fast_jump(self):
-        """Lompat ke penanda berikutnya dalam mode cepat, dan loop kembali ke awal."""
-        if not self.is_fast_jumping:
-            self.fast_jump_timer.stop()
-            return
-        
-        self.fast_jump_index += 1
-        
-        # --- PERUBAHAN LOGIKA: Looping ---
-        # Jika sudah melewati penanda terakhir, kembali ke penanda pertama (indeks 0).
-        if self.fast_jump_index >= len(self.marks):
-            self.fast_jump_index = 0
-
-        # Lompat ke penanda berikutnya (atau penanda pertama jika loop)
-        target_frame = self.marks[self.fast_jump_index]
-        self.media_player.seek_to_position(target_frame)
+    def set_mark_tour_speed(self, speed_ms):
+        """Slot untuk menerima kecepatan mark tour baru dari widget timeline."""
+        self.mark_tour_speed_ms = speed_ms
+        speed_s = speed_ms / 1000.0
+        self.status_bar.showMessage(f"Mark tour speed set to {speed_s} seconds.", 3000)
+        self.timeline.current_mark_tour_speed = speed_ms
     
     def find_item_by_path_recursive(self, path, root_item):
         if not path or not root_item: return None

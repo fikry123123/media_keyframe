@@ -1,10 +1,11 @@
-from PyQt5.QtWidgets import QWidget, QMenu, QAction
+from PyQt5.QtWidgets import QWidget, QMenu, QAction, QActionGroup
 from PyQt5.QtCore import Qt, QPoint, pyqtSignal
 from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont
 
 class TimelineWidget(QWidget):
     position_changed = pyqtSignal(int)
     display_mode_changed = pyqtSignal(bool)
+    markTourSpeedChanged = pyqtSignal(int)
     
     def __init__(self):
         super().__init__()
@@ -17,6 +18,7 @@ class TimelineWidget(QWidget):
         self.marks = []
         self.fps = 0.0
         self.show_timecode = False
+        self.current_mark_tour_speed = 1500
         self.setFixedHeight(44)
         self.setStyleSheet("""
             QWidget {
@@ -46,6 +48,10 @@ class TimelineWidget(QWidget):
         self.show_timecode = enabled
         self.update()
 
+    def _emit_speed_change(self, speed_ms):
+        self.current_mark_tour_speed = speed_ms
+        self.markTourSpeedChanged.emit(speed_ms)
+
     def show_context_menu(self, pos):
         context_menu = QMenu(self)
         
@@ -62,7 +68,36 @@ class TimelineWidget(QWidget):
         frame_action.triggered.connect(lambda: self.display_mode_changed.emit(False))
         timecode_action.triggered.connect(lambda: self.display_mode_changed.emit(True))
 
+        context_menu.addSeparator()
+
+        speed_menu = context_menu.addMenu("Mark Tour Speed")
+        speed_group = QActionGroup(self)
+        speed_group.setExclusive(True)
+
+        speeds = {
+            "Slowest (3s)": 3000,
+            "Slow (2s)": 2000,
+            "Normal (1.5s)": 1500,
+            "Fast (1s)": 1000,
+            "Faster (0.5s)": 500,
+            "Very Fast (0.25s)": 250,
+            "Super Fast (0.1s)": 100,
+            "Hyper (0.05s)": 50,
+            "Max (~60fps)": 16
+        }
+
+        for text, speed_ms in speeds.items():
+            action = QAction(text, self)
+            action.setCheckable(True)
+            action.setData(speed_ms)
+            action.triggered.connect(lambda checked, s=speed_ms: self._emit_speed_change(s))
+            if self.current_mark_tour_speed == speed_ms:
+                action.setChecked(True)
+            speed_menu.addAction(action)
+            speed_group.addAction(action)
+
         context_menu.exec_(self.mapToGlobal(pos))
+
 
     def paintEvent(self, event):
         painter = QPainter(self)
