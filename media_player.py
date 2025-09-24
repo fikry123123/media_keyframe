@@ -31,9 +31,10 @@ class MediaPlayer(QWidget):
         self.video_timer.timeout.connect(self.update_video_frame)
         self.fps = 30
         self.current_media_path = None
-        # --- TAMBAHAN BARU: Penanda status video selesai ---
         self.has_finished = False
         self._volume = 50
+        self.loop_in_point = None
+        self.loop_out_point = None
         self.enable_audio = enable_audio
         self.audio_player = QMediaPlayer(self) if enable_audio else None
         if self.audio_player:
@@ -111,6 +112,11 @@ class MediaPlayer(QWidget):
         total = float(width_a + width_b)
         self.compare_split_ratio = (width_a / total) if total > 0 else None
         
+    def set_loop_range(self, in_point, out_point):
+        """Sets the loop-in and loop-out points for playback."""
+        self.loop_in_point = in_point
+        self.loop_out_point = out_point
+        
     def load_media(self, file_path):
         self.clear_media()
         if not file_path or not os.path.exists(file_path):
@@ -137,7 +143,7 @@ class MediaPlayer(QWidget):
                     self.fpsChanged.emit(self.fps)
                     self.frameReady.emit()
                     self.current_media_path = file_path
-                    self.has_finished = False # Reset penanda saat load media baru
+                    self.has_finished = False 
                     self.playback_start_time = None
                     self._prepare_audio(file_path)
                     return True
@@ -158,7 +164,7 @@ class MediaPlayer(QWidget):
                 self.fpsChanged.emit(0.0)
                 self.frameReady.emit()
                 self.current_media_path = file_path
-                self.has_finished = False # Reset penanda saat load media baru
+                self.has_finished = False
                 self.playback_start_time = None
                 self._prepare_audio(None)
                 return True
@@ -194,11 +200,9 @@ class MediaPlayer(QWidget):
         if self.displayed_frame_source is not None:
             self.display_frame(self.displayed_frame_source)
             
-    # --- PERUBAHAN LOGIKA DI FUNGSI INI ---
     def toggle_play(self):
         if not self.is_video or not self.video_capture: return
 
-        # Jika video sudah selesai, kembali ke awal sebelum memutar
         if self.has_finished:
             self.seek_to_position(0)
             self.has_finished = False
@@ -286,13 +290,19 @@ class MediaPlayer(QWidget):
                 self.current_frame_index = int(self.video_capture.get(cv2.CAP_PROP_POS_FRAMES)) - 1
                 self.display_frame(frame)
                 self.frameIndexChanged.emit(self.current_frame_index, self.total_frames)
-                self.has_finished = False # Jika user seek, video belum selesai
+                self.has_finished = False 
                 self._sync_audio_to_current_frame(force=True)
                 self._reset_playback_clock()
                 
     def update_video_frame(self):
         if not self.is_video or not self.video_capture or not self.is_playing:
             return
+
+        if self.loop_out_point is not None and self.current_frame_index >= self.loop_out_point:
+            loop_start_frame = self.loop_in_point if self.loop_in_point is not None else 0
+            self.seek_to_position(loop_start_frame)
+            return
+
         if self.total_frames <= 0:
             self.stop()
             return
@@ -366,6 +376,8 @@ class MediaPlayer(QWidget):
         self.frameIndexChanged.emit(-1, 0)
         self.fpsChanged.emit(0.0)
         self.has_finished = False
+        self.loop_in_point = None
+        self.loop_out_point = None
         self.playback_start_time = None
         self._prepare_audio(None)
         self.compare_split_ratio = None

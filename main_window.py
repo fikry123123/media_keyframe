@@ -133,6 +133,7 @@ class PlaybackMode(Enum):
     LOOP = auto()
     PLAY_NEXT = auto()
     PLAY_ONCE = auto()
+    LOOP_MARKED_RANGE = auto()
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -166,6 +167,8 @@ class MainWindow(QMainWindow):
         self.current_sequence_index = 0
         self.compare_mode = False
         self.playback_mode = PlaybackMode.LOOP
+        self.loop_in_point = None
+        self.loop_out_point = None
         self.media_player_A_fps, self.media_player_B_fps = 0.0, 0.0
         self.show_timecode = False
         self.is_compare_playing = False
@@ -176,11 +179,21 @@ class MainWindow(QMainWindow):
         self.last_playlist_path = None
         self.media_info_cache = {}
         self.active_panel_for_duration = None
+        
+        self.is_mark_tour_active = False
+        self.current_mark_tour_index = 0
+        self.MARK_TOUR_FRAME_DURATION = 1500 
+        self.mark_tour_timer = QTimer(self)
+        self.mark_tour_timer.setSingleShot(True) 
+
+        self.is_fast_jumping = False
+        self.fast_jump_index = 0
+        self.fast_jump_timer = QTimer(self)
+
         self.setup_ui()
         self.set_playback_mode(PlaybackMode.LOOP)
-        self.active_panel_for_duration = self.source_item # Default to source
+        self.active_panel_for_duration = self.source_item 
         self.update_total_duration()
-
 
     def setup_ui(self):
         central_widget = QWidget()
@@ -260,7 +273,26 @@ class MainWindow(QMainWindow):
         self.playlist_widget.filesDroppedOnTarget.connect(self.handle_files_dropped)
         self.playlist_widget.treeChanged.connect(self.update_total_duration)
         self.playlist_widget.itemClicked.connect(self.on_tree_item_clicked)
+        self.mark_tour_timer.timeout.connect(self.advance_mark_tour)
+        self.fast_jump_timer.timeout.connect(self.advance_fast_jump)
 
+    def setup_shortcuts(self):
+        QShortcut(QKeySequence(Qt.Key_Space), self).activated.connect(self.toggle_play)
+        QShortcut(QKeySequence(Qt.Key_Left), self).activated.connect(self.previous_frame)
+        QShortcut(QKeySequence(Qt.Key_Right), self).activated.connect(self.next_frame)
+        QShortcut(QKeySequence(Qt.Key_Home), self).activated.connect(self.go_to_first_frame)
+        QShortcut(QKeySequence(Qt.Key_End), self).activated.connect(self.go_to_last_frame)
+        QShortcut(QKeySequence("Ctrl+Up"), self).activated.connect(self.play_previous_timeline_item)
+        QShortcut(QKeySequence("Ctrl+Down"), self).activated.connect(self.play_next_timeline_item)
+        QShortcut(QKeySequence(Qt.Key_F), self).activated.connect(self.toggle_mark_at_current_frame)
+        QShortcut(QKeySequence("Ctrl+Shift+M"), self).activated.connect(self.clear_all_marks)
+        QShortcut(QKeySequence(Qt.Key_BracketRight), self).activated.connect(self.jump_to_next_mark)
+        QShortcut(QKeySequence(Qt.Key_BracketLeft), self).activated.connect(self.jump_to_previous_mark)
+        QShortcut(QKeySequence(Qt.Key_L), self).activated.connect(self.toggle_marked_range_loop)
+        QShortcut(QKeySequence("Shift+]"), self).activated.connect(self.jump_and_play_next_mark)
+        QShortcut(QKeySequence("Shift+["), self).activated.connect(self.jump_and_play_previous_mark)
+        QShortcut(QKeySequence("Ctrl+Shift+P"), self).activated.connect(self.toggle_mark_tour)
+        QShortcut(QKeySequence("Ctrl+Shift+J"), self).activated.connect(self.toggle_fast_mark_jump)
 
     def handle_files_dropped(self, file_paths, target_item):
         self.add_files_to_source(file_paths)
@@ -332,7 +364,6 @@ class MainWindow(QMainWindow):
         return f"{hours:02d}:{mins:02d}:{secs:02d}"
 
     def get_media_info(self, file_path):
-        """Gets media info (duration, frames), using a cache."""
         if file_path in self.media_info_cache:
             return self.media_info_cache[file_path]
 
@@ -361,7 +392,6 @@ class MainWindow(QMainWindow):
         return (duration, frame_count)
 
     def _sum_media_info_recursive(self, parent_item):
-        """Recursively sums the duration and frames of all media under a parent item."""
         total_seconds, total_frames = 0.0, 0
         for i in range(parent_item.childCount()):
             child = parent_item.child(i)
@@ -378,9 +408,7 @@ class MainWindow(QMainWindow):
         return (total_seconds, total_frames)
 
     def on_tree_item_clicked(self, item, column):
-        # Only update to total duration if a folder-like item is clicked
         if item.data(0, Qt.UserRole) is not None:
-            # This is a file, do nothing. load_single_file will handle the update.
             return
 
         parent = item
@@ -399,7 +427,6 @@ class MainWindow(QMainWindow):
         self.update_total_duration()
 
     def update_total_duration(self):
-        """Calculates and updates the total duration/frames label for the active panel."""
         if not self.active_panel_for_duration:
             return
 
@@ -412,7 +439,6 @@ class MainWindow(QMainWindow):
         
         self.total_duration_label.setText(f"{label_prefix}: {duration_str} ({total_frames})")
 
-        
     def create_menu_bar(self):
         menubar = self.menuBar()
         file_menu = menubar.addMenu('File')
@@ -489,12 +515,21 @@ class MainWindow(QMainWindow):
     
     def set_playback_mode(self, mode):
         self.playback_mode = mode
-        if mode == PlaybackMode.LOOP:
-            self.controls.set_playback_mode_state("🔁", "Playback Mode: Loop")
-        elif mode == PlaybackMode.PLAY_NEXT:
-            self.controls.set_playback_mode_state("⤵️", "Playback Mode: Play Next (Timeline only)")
-        elif mode == PlaybackMode.PLAY_ONCE:
-            self.controls.set_playback_mode_state("➡️|", "Playback Mode: Play Once")
+        
+        if mode != PlaybackMode.LOOP_MARKED_RANGE:
+            self.loop_in_point = None
+            self.loop_out_point = None
+            if mode == PlaybackMode.LOOP:
+                self.controls.set_playback_mode_state("🔁", "Playback Mode: Loop")
+            elif mode == PlaybackMode.PLAY_NEXT:
+                self.controls.set_playback_mode_state("⤵️", "Playback Mode: Play Next (Timeline only)")
+            elif mode == PlaybackMode.PLAY_ONCE:
+                self.controls.set_playback_mode_state("➡️|", "Playback Mode: Play Once")
+        else:
+            if self.loop_in_point is not None and self.loop_out_point is not None:
+                 self.controls.set_playback_mode_state("[🔁]", f"Playback Mode: Loop Range ({self.loop_in_point+1} - {self.loop_out_point+1})")
+
+        self.media_player.set_loop_range(self.loop_in_point, self.loop_out_point)
 
     def cycle_playback_mode(self):
         if self.playback_mode == PlaybackMode.LOOP:
@@ -503,6 +538,44 @@ class MainWindow(QMainWindow):
             self.set_playback_mode(PlaybackMode.PLAY_ONCE)
         else:
             self.set_playback_mode(PlaybackMode.LOOP)
+
+    def toggle_marked_range_loop(self):
+        if self.playback_mode == PlaybackMode.LOOP_MARKED_RANGE:
+            self.set_playback_mode(PlaybackMode.LOOP)
+            self.status_bar.showMessage("Marked range loop disabled.", 2000)
+            return
+
+        if len(self.marks) < 2:
+            self.status_bar.showMessage("Cannot set loop range. Please add at least two marks.", 3000)
+            return
+        
+        current_frame = self.media_player.current_frame_index
+        
+        start_mark = None
+        for mark in reversed(self.marks):
+            if mark <= current_frame:
+                start_mark = mark
+                break
+        
+        if start_mark is None:
+            start_mark = self.marks[0]
+
+        end_mark = None
+        try:
+            start_index = self.marks.index(start_mark)
+            if start_index < len(self.marks) - 1:
+                end_mark = self.marks[start_index + 1]
+            else:
+                self.status_bar.showMessage("Cannot start loop from the last mark.", 3000)
+                return
+        except ValueError:
+            return 
+
+        if start_mark is not None and end_mark is not None:
+            self.loop_in_point = start_mark
+            self.loop_out_point = end_mark
+            self.set_playback_mode(PlaybackMode.LOOP_MARKED_RANGE)
+            self.status_bar.showMessage(f"Looping between frame {start_mark + 1} and {end_mark + 1}.", 3000)
 
     def handle_volume_change(self, value):
         self.media_player.set_volume(value)
@@ -683,6 +756,9 @@ class MainWindow(QMainWindow):
         self.update_total_duration()
         
     def toggle_play(self):
+        if self.is_mark_tour_active: self.toggle_mark_tour()
+        if self.is_fast_jumping: self.toggle_fast_mark_jump()
+        
         if self.compare_mode:
             if self.is_compare_playing:
                 self.compare_timer.stop()
@@ -707,9 +783,10 @@ class MainWindow(QMainWindow):
         self.media_player.next_frame()
         self.media_player_2.next_frame()
         self.update_composite_view()
-        at_end_a = self.media_player.current_frame_index >= self.media_player.total_frames - 1
-        at_end_b = self.media_player_2.current_frame_index >= self.media_player_2.total_frames - 1
-        if (at_end_a and self.media_player.total_frames > 0) or (at_end_b and self.media_player_2.total_frames > 0):
+        finished_a = not self.media_player.has_media() or self.media_player.current_frame_index >= self.media_player.total_frames - 1
+        finished_b = not self.media_player_2.has_media() or self.media_player_2.current_frame_index >= self.media_player_2.total_frames - 1
+        
+        if finished_a and finished_b:
             self.compare_timer.stop()
             self.handle_playback_finished()
             
@@ -728,6 +805,8 @@ class MainWindow(QMainWindow):
             self.update_composite_view()
             
     def seek_to_position(self, position):
+        if self.is_mark_tour_active: self.toggle_mark_tour()
+        if self.is_fast_jumping: self.toggle_fast_mark_jump()
         self.media_player.seek_to_position(position)
         if self.compare_mode:
             self.media_player_2.seek_to_position(position)
@@ -746,21 +825,6 @@ class MainWindow(QMainWindow):
         
     def update_frame_counter_B(self, cf, tf): pass
     
-    def setup_shortcuts(self):
-        QShortcut(QKeySequence(Qt.Key_Space), self).activated.connect(self.toggle_play)
-        QShortcut(QKeySequence(Qt.Key_Left), self).activated.connect(self.previous_frame)
-        QShortcut(QKeySequence(Qt.Key_Right), self).activated.connect(self.next_frame)
-        QShortcut(QKeySequence(Qt.Key_Home), self).activated.connect(self.go_to_first_frame)
-        QShortcut(QKeySequence(Qt.Key_End), self).activated.connect(self.go_to_last_frame)
-        QShortcut(QKeySequence("Ctrl+Up"), self).activated.connect(self.play_previous_timeline_item)
-        QShortcut(QKeySequence("Ctrl+Down"), self).activated.connect(self.play_next_timeline_item)
-        # --- PERUBAHAN SHORTCUT MARKING ---
-        QShortcut(QKeySequence(Qt.Key_F), self).activated.connect(self.toggle_mark_at_current_frame)
-        QShortcut(QKeySequence("Ctrl+Shift+M"), self).activated.connect(self.clear_all_marks)
-        # --- SHORTCUT BARU UNTUK LOMPAT ANTAR MARK ---
-        QShortcut(QKeySequence(Qt.Key_BracketRight), self).activated.connect(self.jump_to_next_mark)
-        QShortcut(QKeySequence(Qt.Key_BracketLeft), self).activated.connect(self.jump_to_previous_mark)
-
     def toggle_mark_at_current_frame(self):
         if not self.media_player.has_media(): return
         current_frame = self.media_player.current_frame_index
@@ -779,9 +843,7 @@ class MainWindow(QMainWindow):
         self.timeline.set_marks(self.marks)
         self.status_bar.showMessage("All marks cleared", 2000)
         
-    # --- FUNGSI BARU UNTUK LOMPAT ANTAR MARK ---
     def jump_to_next_mark(self):
-        """Melompat ke penanda berikutnya."""
         if not self.marks: return
         current_frame = self.media_player.current_frame_index
         next_mark = None
@@ -789,14 +851,12 @@ class MainWindow(QMainWindow):
             if mark > current_frame:
                 next_mark = mark
                 break
-        # Jika tidak ada marker berikutnya, lompat ke marker pertama (looping)
         if next_mark is None and self.marks:
             next_mark = self.marks[0]
         if next_mark is not None:
-            self.seek_to_position(next_mark)
+            self.media_player.seek_to_position(next_mark)
 
     def jump_to_previous_mark(self):
-        """Melompat ke penanda sebelumnya."""
         if not self.marks: return
         current_frame = self.media_player.current_frame_index
         prev_mark = None
@@ -804,13 +864,102 @@ class MainWindow(QMainWindow):
             if mark < current_frame:
                 prev_mark = mark
                 break
-        # Jika tidak ada marker sebelumnya, lompat ke marker terakhir (looping)
         if prev_mark is None and self.marks:
             prev_mark = self.marks[-1]
         if prev_mark is not None:
-            self.seek_to_position(prev_mark)
-    # --- AKHIR FUNGSI BARU ---
+            self.media_player.seek_to_position(prev_mark)
+            
+    def jump_and_play_next_mark(self):
+        self.jump_to_next_mark()
+        if not self.media_player.is_playing:
+            QTimer.singleShot(50, self.toggle_play)
 
+    def jump_and_play_previous_mark(self):
+        self.jump_to_previous_mark()
+        if not self.media_player.is_playing:
+            QTimer.singleShot(50, self.toggle_play)
+
+    def toggle_mark_tour(self):
+        if self.is_mark_tour_active:
+            self.is_mark_tour_active = False
+            if self.media_player.is_playing:
+                self.toggle_play()
+            self.mark_tour_timer.stop()
+            self.status_bar.showMessage("Mark tour stopped.", 3000)
+        else:
+            if not self.marks:
+                self.status_bar.showMessage("No marks available to start a tour.", 3000)
+                return
+            
+            if self.playback_mode == PlaybackMode.LOOP_MARKED_RANGE:
+                self.set_playback_mode(PlaybackMode.LOOP)
+            
+            if self.media_player.is_playing:
+                self.toggle_play()
+
+            self.is_mark_tour_active = True
+            self.current_mark_tour_index = 0
+            self.status_bar.showMessage("Mark tour (Slideshow) started. Press Ctrl+Shift+P to stop.", 5000)
+            self.show_current_mark_frame()
+
+    def show_current_mark_frame(self):
+        if not self.is_mark_tour_active or self.current_mark_tour_index >= len(self.marks):
+            if self.is_mark_tour_active:
+                self.toggle_mark_tour() 
+            return
+
+        if self.media_player.is_playing:
+            self.toggle_play()
+
+        target_frame = self.marks[self.current_mark_tour_index]
+        self.media_player.seek_to_position(target_frame)
+        
+        self.mark_tour_timer.start(self.MARK_TOUR_FRAME_DURATION)
+
+    def advance_mark_tour(self):
+        if not self.is_mark_tour_active:
+            return
+        
+        self.current_mark_tour_index += 1
+        self.show_current_mark_frame()
+
+    def toggle_fast_mark_jump(self):
+        if self.is_fast_jumping:
+            self.is_fast_jumping = False
+            self.fast_jump_timer.stop()
+            self.status_bar.showMessage("Fast jump stopped.", 3000)
+        else:
+            if not self.marks:
+                self.status_bar.showMessage("No marks to jump through.", 3000)
+                return
+            
+            if self.media_player.is_playing:
+                self.toggle_play()
+
+            self.is_fast_jumping = True
+            self.fast_jump_index = 0
+            self.status_bar.showMessage("Fast jump started. Press Ctrl+Shift+J to stop.", 5000)
+            first_mark = self.marks[self.fast_jump_index]
+            self.media_player.seek_to_position(first_mark)
+            self.fast_jump_timer.start(100)
+
+    def advance_fast_jump(self):
+        """Lompat ke penanda berikutnya dalam mode cepat, dan loop kembali ke awal."""
+        if not self.is_fast_jumping:
+            self.fast_jump_timer.stop()
+            return
+        
+        self.fast_jump_index += 1
+        
+        # --- PERUBAHAN LOGIKA: Looping ---
+        # Jika sudah melewati penanda terakhir, kembali ke penanda pertama (indeks 0).
+        if self.fast_jump_index >= len(self.marks):
+            self.fast_jump_index = 0
+
+        # Lompat ke penanda berikutnya (atau penanda pertama jika loop)
+        target_frame = self.marks[self.fast_jump_index]
+        self.media_player.seek_to_position(target_frame)
+    
     def find_item_by_path_recursive(self, path, root_item):
         if not path or not root_item: return None
         iterator = QTreeWidgetItemIterator(root_item)
@@ -951,14 +1100,17 @@ class MainWindow(QMainWindow):
     def update_composite_view(self):
         frame_a = self.media_player.current_frame
         frame_b = self.media_player_2.current_frame
-        total_f = self.media_player.total_frames if self.media_player.has_media() else self.media_player_2.total_frames
-        current_f = self.media_player.current_frame_index if self.media_player.has_media() else self.media_player_2.current_frame_index
+        total_f = max(self.media_player.total_frames, self.media_player_2.total_frames)
+        current_f = max(self.media_player.current_frame_index, self.media_player_2.current_frame_index)
+
         self.timeline.set_duration(total_f)
         self.timeline.set_position(current_f)
+        
         if total_f > 0 and current_f >= 0:
             self.frame_counter_label.setText(f"Frame: {current_f + 1} / {total_f}")
         else:
             self.frame_counter_label.setText("No Media")
+            
         h_a, w_a = (frame_a.shape[0], frame_a.shape[1]) if frame_a is not None else (480, 640)
         h_b, w_b = (frame_b.shape[0], frame_b.shape[1]) if frame_b is not None else (480, 640)
         if frame_a is None: frame_a = self.create_placeholder_frame("View A", w_a, h_a)
@@ -1004,7 +1156,6 @@ class MainWindow(QMainWindow):
             text_a = f"A: {self.media_player_A_fps:.2f} FPS"
             text_b = f"B: {self.media_player_B_fps:.2f} FPS"
             self.fps_label.setText(f"{text_a} | {text_b}")
-
             
     def go_to_first_frame(self):
         if self.media_player.is_playing or self.is_compare_playing:

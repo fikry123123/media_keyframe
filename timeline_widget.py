@@ -134,8 +134,7 @@ class TimelineWidget(QWidget):
         if self.duration <= 0 or self.current_position < 0:
             return ""
         frame_current = self.current_position + 1
-        frame_total = self.duration
-        frame_text = f"{frame_current:,} / {frame_total:,}"
+        
         if self.show_timecode and self.fps > 0:
             total_seconds = self.current_position / self.fps
             minutes = int(total_seconds // 60)
@@ -150,5 +149,9 @@ class TimelineWidget(QWidget):
                     seconds = 0
                     minutes += 1
             time_text = f"{minutes:02d}:{seconds:02d}.{frames:02d}"
-            return f"{time_text}  ({frame_text})"
-        return frame_text
+            # --- PERUBAHAN LOGIKA FINAL ---
+            # Kembalikan hanya timecode, tanpa tambahan info frame.
+            return time_text
+            
+        # Jika bukan mode timecode, kembalikan hanya frame saat ini.
+        return f"{frame_current:,}"
