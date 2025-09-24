@@ -7,7 +7,7 @@ import numpy as np
 from enum import Enum, auto
 from PyQt5.QtWidgets import (QMainWindow, QVBoxLayout, QWidget, QMenuBar, QAction, QMenu,
                             QFileDialog, QHBoxLayout, QStatusBar, QLabel, QSplitter,
-                            QTreeWidget, QTreeWidgetItem, QPushButton, QShortcut, 
+                            QTreeWidget, QTreeWidgetItem, QPushButton, QShortcut,
                             QTreeWidgetItemIterator, QAbstractItemView, QMessageBox)
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QMimeData
 from PyQt5.QtGui import QDragEnterEvent, QDropEvent, QKeySequence, QPixmap, QDrag, QColor
@@ -18,6 +18,7 @@ from timeline_widget import TimelineWidget
 
 class ProjectTreeWidget(QTreeWidget):
     filesDroppedOnTarget = pyqtSignal(list, object)
+    treeChanged = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -83,15 +84,16 @@ class ProjectTreeWidget(QTreeWidget):
             event.ignore()
             
     def dropEvent(self, event: QDropEvent):
+        source_changed = False
         if event.mimeData().hasUrls():
             files = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
             if files:
                 target = self.itemAt(event.pos())
                 self.filesDroppedOnTarget.emit(files, target)
+                source_changed = True
             event.accept()
-            return
 
-        if event.mimeData().hasFormat("application/x-playlist-paths"):
+        elif event.mimeData().hasFormat("application/x-playlist-paths"):
             target_item = self.itemAt(event.pos())
             if not target_item:
                 event.ignore()
@@ -116,9 +118,15 @@ class ProjectTreeWidget(QTreeWidget):
                     new_item = QTreeWidgetItem(target_folder, [os.path.basename(file_path)])
                     new_item.setData(0, Qt.UserRole, file_path)
                     new_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled | Qt.ItemIsEditable)
+                    source_changed = True
             event.accept()
         else:
             super().dropEvent(event)
+            if event.isAccepted():
+                source_changed = True
+        
+        if source_changed:
+            self.treeChanged.emit()
 
 
 class PlaybackMode(Enum):
@@ -166,8 +174,13 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(False)
         self.splitter_sizes = []
         self.last_playlist_path = None
+        self.media_info_cache = {}
+        self.active_panel_for_duration = None
         self.setup_ui()
         self.set_playback_mode(PlaybackMode.LOOP)
+        self.active_panel_for_duration = self.source_item # Default to source
+        self.update_total_duration()
+
 
     def setup_ui(self):
         central_widget = QWidget()
@@ -245,6 +258,9 @@ class MainWindow(QMainWindow):
         self.media_player_2.fpsChanged.connect(lambda fps: self.update_fps_display(fps, 'B'))
         self.media_player.fileDropped.connect(self.handle_file_drop_on_player)
         self.playlist_widget.filesDroppedOnTarget.connect(self.handle_files_dropped)
+        self.playlist_widget.treeChanged.connect(self.update_total_duration)
+        self.playlist_widget.itemClicked.connect(self.on_tree_item_clicked)
+
 
     def handle_files_dropped(self, file_paths, target_item):
         self.add_files_to_source(file_paths)
@@ -271,6 +287,7 @@ class MainWindow(QMainWindow):
                     new_item.setData(0, Qt.UserRole, file_path)
                     new_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled | Qt.ItemIsEditable)
                     new_item.setToolTip(0, file_path)
+        self.update_total_duration()
 
     def show_tree_context_menu(self, pos):
         item = self.playlist_widget.itemAt(pos)
@@ -305,6 +322,96 @@ class MainWindow(QMainWindow):
         new_folder = QTreeWidgetItem(parent_item, [name])
         new_folder.setFlags(new_folder.flags() | Qt.ItemIsEditable | Qt.ItemIsDropEnabled | Qt.ItemIsDragEnabled)
         self.playlist_widget.editItem(new_folder, 0)
+
+    def format_duration(self, seconds):
+        if seconds is None or seconds < 0:
+            return "00:00:00"
+        secs = int(seconds)
+        mins, secs = divmod(secs, 60)
+        hours, mins = divmod(mins, 60)
+        return f"{hours:02d}:{mins:02d}:{secs:02d}"
+
+    def get_media_info(self, file_path):
+        """Gets media info (duration, frames), using a cache."""
+        if file_path in self.media_info_cache:
+            return self.media_info_cache[file_path]
+
+        if not file_path or not os.path.exists(file_path):
+            return (0.0, 0)
+
+        duration, frame_count = 0.0, 0
+        try:
+            image_extensions = ['.png', '.jpg', '.jpeg', '.bmp', '.tiff']
+            if any(file_path.lower().endswith(ext) for ext in image_extensions):
+                duration, frame_count = 0.0, 1
+            else:
+                cap = cv2.VideoCapture(file_path)
+                if cap.isOpened():
+                    fps = cap.get(cv2.CAP_PROP_FPS)
+                    f_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                    if fps > 0 and f_count > 0:
+                        duration = f_count / fps
+                        frame_count = f_count
+                cap.release()
+        except Exception as e:
+            print(f"Could not get info for {file_path}: {e}")
+            duration, frame_count = 0.0, 0
+        
+        self.media_info_cache[file_path] = (duration, frame_count)
+        return (duration, frame_count)
+
+    def _sum_media_info_recursive(self, parent_item):
+        """Recursively sums the duration and frames of all media under a parent item."""
+        total_seconds, total_frames = 0.0, 0
+        for i in range(parent_item.childCount()):
+            child = parent_item.child(i)
+            path = child.data(0, Qt.UserRole)
+            if path:
+                duration, frames = self.get_media_info(path)
+                total_seconds += duration
+                total_frames += frames
+            
+            if child.childCount() > 0:
+                sub_seconds, sub_frames = self._sum_media_info_recursive(child)
+                total_seconds += sub_seconds
+                total_frames += sub_frames
+        return (total_seconds, total_frames)
+
+    def on_tree_item_clicked(self, item, column):
+        # Only update to total duration if a folder-like item is clicked
+        if item.data(0, Qt.UserRole) is not None:
+            # This is a file, do nothing. load_single_file will handle the update.
+            return
+
+        parent = item
+        is_in_timeline = False
+        while parent:
+            if parent == self.timeline_item:
+                is_in_timeline = True
+                break
+            parent = parent.parent()
+
+        if is_in_timeline:
+            self.active_panel_for_duration = self.timeline_item
+        else:
+            self.active_panel_for_duration = self.source_item
+        
+        self.update_total_duration()
+
+    def update_total_duration(self):
+        """Calculates and updates the total duration/frames label for the active panel."""
+        if not self.active_panel_for_duration:
+            return
+
+        total_seconds, total_frames = self._sum_media_info_recursive(self.active_panel_for_duration)
+        duration_str = self.format_duration(total_seconds)
+        
+        label_prefix = "Total Source"
+        if self.active_panel_for_duration == self.timeline_item:
+            label_prefix = "Total Timeline"
+        
+        self.total_duration_label.setText(f"{label_prefix}: {duration_str} ({total_frames})")
+
         
     def create_menu_bar(self):
         menubar = self.menuBar()
@@ -343,17 +450,27 @@ class MainWindow(QMainWindow):
     def create_status_bar(self):
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
+        
+        style = "QLabel { color: #ffffff; font-weight: bold; font-size: 14px; padding: 2px 8px; background-color: #444444; border-radius: 3px; margin: 2px; }"
+        
+        self.total_duration_label = QLabel("Total Source: 00:00:00 (0)")
+        self.total_duration_label.setStyleSheet(style)
+        self.status_bar.addPermanentWidget(self.total_duration_label)
+
         self.frame_counter_label = QLabel("Frame: 0 / 0")
-        self.frame_counter_label.setStyleSheet("QLabel { color: #ffffff; font-weight: bold; font-size: 14px; padding: 2px 8px; background-color: #444444; border-radius: 3px; margin: 2px; }")
+        self.frame_counter_label.setStyleSheet(style)
         self.status_bar.addPermanentWidget(self.frame_counter_label)
+
         self.fps_label = QLabel("FPS: 0")
-        self.fps_label.setStyleSheet("QLabel { color: #ffffff; font-weight: bold; font-size: 14px; padding: 2px 8px; background-color: #444444; border-radius: 3px; margin: 2px; }")
+        self.fps_label.setStyleSheet(style)
         self.status_bar.addPermanentWidget(self.fps_label)
+        
         self.status_bar.setStyleSheet("QStatusBar { font-size: 12px; font-weight: bold; }")
         self.status_bar.showMessage("Ready")
         
     def handle_file_drop_on_player(self, file_path, target_view):
         self.add_files_to_source([file_path])
+        self.update_total_duration()
         if not self.compare_mode:
             self.load_single_file(file_path)
         else:
@@ -368,6 +485,7 @@ class MainWindow(QMainWindow):
         for item in list(selected_items):
             if item.parent():
                 item.parent().removeChild(item)
+        self.update_total_duration()
     
     def set_playback_mode(self, mode):
         self.playback_mode = mode
@@ -469,6 +587,8 @@ class MainWindow(QMainWindow):
         else:
             self.status_bar.showMessage(f"Playlist loaded: {os.path.basename(file_path)}", 4000)
         self.update_playlist_item_indicator()
+        self.active_panel_for_duration = self.source_item
+        self.update_total_duration()
 
     def _serialize_playlist_branch(self, parent_item, base_dir):
         return [self._serialize_playlist_item(parent_item.child(i), base_dir) for i in range(parent_item.childCount())]
@@ -558,6 +678,9 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage("Project cleared")
         self.update_playlist_item_indicator()
         self.clear_all_marks()
+        self.media_info_cache.clear()
+        self.active_panel_for_duration = self.source_item
+        self.update_total_duration()
         
     def toggle_play(self):
         if self.compare_mode:
@@ -667,9 +790,10 @@ class MainWindow(QMainWindow):
                 next_mark = mark
                 break
         # Jika tidak ada marker berikutnya, lompat ke marker pertama (looping)
-        if next_mark is None:
+        if next_mark is None and self.marks:
             next_mark = self.marks[0]
-        self.seek_to_position(next_mark)
+        if next_mark is not None:
+            self.seek_to_position(next_mark)
 
     def jump_to_previous_mark(self):
         """Melompat ke penanda sebelumnya."""
@@ -681,9 +805,10 @@ class MainWindow(QMainWindow):
                 prev_mark = mark
                 break
         # Jika tidak ada marker sebelumnya, lompat ke marker terakhir (looping)
-        if prev_mark is None:
+        if prev_mark is None and self.marks:
             prev_mark = self.marks[-1]
-        self.seek_to_position(prev_mark)
+        if prev_mark is not None:
+            self.seek_to_position(prev_mark)
     # --- AKHIR FUNGSI BARU ---
 
     def find_item_by_path_recursive(self, path, root_item):
@@ -773,8 +898,13 @@ class MainWindow(QMainWindow):
         self.clear_all_marks()
         success = self.media_player.load_media(file_path)
         self.media_player.set_compare_split()
-        if success: self.status_bar.showMessage(f"Loaded: {os.path.basename(file_path)}")
-        else: self.status_bar.showMessage(f"Failed to load file")
+        if success:
+            self.status_bar.showMessage(f"Loaded: {os.path.basename(file_path)}")
+            duration, frames = self.get_media_info(file_path)
+            self.total_duration_label.setText(f"Duration: {self.format_duration(duration)} ({frames})")
+        else:
+            self.status_bar.showMessage(f"Failed to load file")
+            self.update_total_duration()
         self.update_playlist_item_indicator()
             
     def load_compare_files(self, file1, file2):
@@ -784,6 +914,14 @@ class MainWindow(QMainWindow):
         f1 = os.path.basename(file1) if file1 else "Empty"
         f2 = os.path.basename(file2) if file2 else "Empty"
         self.status_bar.showMessage(f"Comparing: {f1} vs {f2}")
+        
+        dur1, frames1 = self.get_media_info(file1) if file1 else (0, 0)
+        dur2, frames2 = self.get_media_info(file2) if file2 else (0, 0)
+        dur1_str = self.format_duration(dur1)
+        dur2_str = self.format_duration(dur2)
+        
+        self.total_duration_label.setText(f"A: {dur1_str} ({frames1}) | B: {dur2_str} ({frames2})")
+        
         QTimer.singleShot(50, self.update_composite_view)
         self.update_playlist_item_indicator()
         
@@ -800,6 +938,14 @@ class MainWindow(QMainWindow):
             self.media_player_2.clear_media()
             self.media_player.display_frame(self.media_player.current_frame)
             self.media_player.set_compare_split()
+            
+            current_path = self.media_player.get_current_file_path()
+            if current_path:
+                duration, frames = self.get_media_info(current_path)
+                self.total_duration_label.setText(f"Duration: {self.format_duration(duration)} ({frames})")
+            else:
+                self.update_total_duration()
+
         self.update_playlist_item_indicator()
             
     def update_composite_view(self):
