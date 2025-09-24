@@ -408,36 +408,47 @@ class MainWindow(QMainWindow):
         return (total_seconds, total_frames)
 
     def on_tree_item_clicked(self, item, column):
-        if item.data(0, Qt.UserRole) is not None:
-            return
+        # Hanya hitung durasi jika item yang diklik adalah folder (tidak punya path file)
+        if item.data(0, Qt.UserRole) is None:
+            self.update_total_duration(item)
 
-        parent = item
-        is_in_timeline = False
-        while parent:
-            if parent == self.timeline_item:
-                is_in_timeline = True
-                break
-            parent = parent.parent()
+    def update_total_duration(self, item_to_calculate=None):
+            # Jika tidak ada item spesifik yang diberikan, gunakan yang terakhir aktif
+            if item_to_calculate is None:
+                item_to_calculate = self.active_panel_for_duration
+            
+            # Jika masih tidak ada item target, hentikan fungsi
+            if not item_to_calculate:
+                return
 
-        if is_in_timeline:
-            self.active_panel_for_duration = self.timeline_item
-        else:
-            self.active_panel_for_duration = self.source_item
-        
-        self.update_total_duration()
+            # Simpan item yang sedang dihitung sebagai panel aktif
+            self.active_panel_for_duration = item_to_calculate
 
-    def update_total_duration(self):
-        if not self.active_panel_for_duration:
-            return
+            # Lakukan perhitungan rekursif mulai dari item yang diberikan
+            total_seconds, total_frames = self._sum_media_info_recursive(item_to_calculate)
+            duration_str = self.format_duration(total_seconds)
+            
+            # Tentukan label prefix ("Source" atau "Timeline") berdasarkan parent dari item
+            label_prefix = "Total Source"
+            parent = item_to_calculate
+            while parent:
+                if parent == self.timeline_item:
+                    label_prefix = "Total Timeline"
+                    break
+                parent = parent.parent()
+            
+            # Buat teks final untuk ditampilkan di status bar
+            final_text = ""
+            # Jika item yang dihitung adalah folder root, gunakan format lama
+            if item_to_calculate == self.source_item or item_to_calculate == self.timeline_item:
+                final_text = f"{label_prefix}: {duration_str} ({total_frames})"
+            else:
+                # Jika item adalah subfolder, tambahkan namanya untuk kejelasan
+                folder_name = item_to_calculate.text(0)
+                final_text = f"{label_prefix} [{folder_name}]: {duration_str} ({total_frames})"
 
-        total_seconds, total_frames = self._sum_media_info_recursive(self.active_panel_for_duration)
-        duration_str = self.format_duration(total_seconds)
-        
-        label_prefix = "Total Source"
-        if self.active_panel_for_duration == self.timeline_item:
-            label_prefix = "Total Timeline"
-        
-        self.total_duration_label.setText(f"{label_prefix}: {duration_str} ({total_frames})")
+            # Perbarui teks label di status bar
+            self.total_duration_label.setText(final_text)
 
     def create_menu_bar(self):
         menubar = self.menuBar()

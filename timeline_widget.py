@@ -68,11 +68,23 @@ class TimelineWidget(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         
+        # 1. Gambar latar belakang
         painter.setBrush(QBrush(QColor("#3a3a3a")))
         painter.setPen(Qt.NoPen)
         painter.drawRect(self.rect())
         
         if self.duration > 0:
+            # --- PERUBAHAN URUTAN GAMBAR ---
+            # 2. Gambar semua garis penanda (marks) terlebih dahulu
+            painter.setPen(QPen(QColor("#ffffff"), 2))
+            for mark_frame in self.marks:
+                if self.duration > 1:
+                    mark_x = (mark_frame / (self.duration - 1)) * self.width()
+                else:
+                    mark_x = 0
+                painter.drawLine(int(mark_x), 10, int(mark_x), self.height())
+
+            # 3. Setelah itu, gambar playhead dan labelnya agar berada di lapisan atas
             marker_x = (self.current_position / (self.duration - 1)) * self.width() if self.duration > 1 else 0
 
             painter.setPen(QPen(QColor("#ffffff"), 2))
@@ -102,14 +114,6 @@ class TimelineWidget(QWidget):
                 painter.drawText(bubble_x, bubble_y, bubble_width, bubble_height,
                                  Qt.AlignCenter | Qt.AlignVCenter, display_text)
 
-            painter.setPen(QPen(QColor("#ffffff"), 2))
-
-            for mark_frame in self.marks:
-                if self.duration > 1:
-                    mark_x = (mark_frame / (self.duration - 1)) * self.width()
-                else:
-                    mark_x = 0
-                painter.drawLine(int(mark_x), 10, int(mark_x), self.height())
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -149,9 +153,6 @@ class TimelineWidget(QWidget):
                     seconds = 0
                     minutes += 1
             time_text = f"{minutes:02d}:{seconds:02d}.{frames:02d}"
-            # --- PERUBAHAN LOGIKA FINAL ---
-            # Kembalikan hanya timecode, tanpa tambahan info frame.
             return time_text
             
-        # Jika bukan mode timecode, kembalikan hanya frame saat ini.
         return f"{frame_current:,}"
