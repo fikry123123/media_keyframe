@@ -1,22 +1,24 @@
 import os
 import sys
 import glob
+import json
 import cv2
 import numpy as np
 from enum import Enum, auto
 from PyQt5.QtWidgets import (QMainWindow, QVBoxLayout, QWidget, QMenuBar, QAction, QMenu,
                             QFileDialog, QHBoxLayout, QStatusBar, QLabel, QSplitter,
-                            QTreeWidget, QTreeWidgetItem, QPushButton, QShortcut, 
-                            QTreeWidgetItemIterator, QAbstractItemView)
+                            QTreeWidget, QTreeWidgetItem, QPushButton, QShortcut,
+                            QTreeWidgetItemIterator, QAbstractItemView, QMessageBox)
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QMimeData
-from PyQt5.QtGui import QDragEnterEvent, QDropEvent, QKeySequence, QPixmap, QDrag
+from PyQt5.QtGui import QDragEnterEvent, QDropEvent, QKeySequence, QPixmap, QDrag, QColor
 from media_player import MediaPlayer
 from media_controls import MediaControls
 from timeline_widget import TimelineWidget
 
 
 class ProjectTreeWidget(QTreeWidget):
-    filesDroppedOnTarget = pyqtSignal(list, QTreeWidgetItem)
+    filesDroppedOnTarget = pyqtSignal(list, object)
+    treeChanged = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -82,15 +84,16 @@ class ProjectTreeWidget(QTreeWidget):
             event.ignore()
             
     def dropEvent(self, event: QDropEvent):
+        source_changed = False
         if event.mimeData().hasUrls():
             files = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
             if files:
                 target = self.itemAt(event.pos())
                 self.filesDroppedOnTarget.emit(files, target)
+                source_changed = True
             event.accept()
-            return
 
-        if event.mimeData().hasFormat("application/x-playlist-paths"):
+        elif event.mimeData().hasFormat("application/x-playlist-paths"):
             target_item = self.itemAt(event.pos())
             if not target_item:
                 event.ignore()
@@ -115,20 +118,27 @@ class ProjectTreeWidget(QTreeWidget):
                     new_item = QTreeWidgetItem(target_folder, [os.path.basename(file_path)])
                     new_item.setData(0, Qt.UserRole, file_path)
                     new_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled | Qt.ItemIsEditable)
+                    source_changed = True
             event.accept()
         else:
             super().dropEvent(event)
+            if event.isAccepted():
+                source_changed = True
+        
+        if source_changed:
+            self.treeChanged.emit()
 
 
 class PlaybackMode(Enum):
     LOOP = auto()
     PLAY_NEXT = auto()
     PLAY_ONCE = auto()
+    LOOP_MARKED_RANGE = auto()
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Studio Media Player")
+        self.setWindowTitle("Kenae Player")
         self.setGeometry(100, 100, 1200, 800)
         self.setStyleSheet("""
             QMainWindow { background-color: #2b2b2b; color: #ffffff; }
@@ -157,6 +167,8 @@ class MainWindow(QMainWindow):
         self.current_sequence_index = 0
         self.compare_mode = False
         self.playback_mode = PlaybackMode.LOOP
+        self.loop_in_point = None
+        self.loop_out_point = None
         self.media_player_A_fps, self.media_player_B_fps = 0.0, 0.0
         self.show_timecode = False
         self.is_compare_playing = False
@@ -164,8 +176,21 @@ class MainWindow(QMainWindow):
         self.compare_timer.timeout.connect(self.update_compare_frames)
         self.setAcceptDrops(False)
         self.splitter_sizes = []
+        self.last_playlist_path = None
+        self.media_info_cache = {}
+        self.active_panel_for_duration = None
+        
+        self.is_mark_tour_active = False
+        self.current_mark_tour_index = 0
+        self.mark_tour_speed_ms = 1500 
+        self.mark_tour_timer = QTimer(self)
+        self.mark_tour_timer.setTimerType(Qt.PreciseTimer)
+        self.mark_tour_timer.setSingleShot(True) 
+
         self.setup_ui()
         self.set_playback_mode(PlaybackMode.LOOP)
+        self.active_panel_for_duration = self.source_item 
+        self.update_total_duration()
 
     def setup_ui(self):
         central_widget = QWidget()
@@ -207,12 +232,13 @@ class MainWindow(QMainWindow):
         self.media_container_layout.setContentsMargins(0,0,0,0)
         self.media_player = MediaPlayer()
         self.media_container_layout.addWidget(self.media_player)
-        self.media_player_2 = MediaPlayer()
+        self.media_player_2 = MediaPlayer(enable_audio=False)
         media_layout.addWidget(self.media_container, 1)
         self.timeline = TimelineWidget()
         media_layout.addWidget(self.timeline)
         self.controls = MediaControls()
         self.controls.set_compare_state(self.compare_mode)
+        self.controls.set_volume(self.media_player.volume())
         media_layout.addWidget(self.controls)
         self.splitter.addWidget(self.playlist_widget_container)
         self.splitter.addWidget(media_widget)
@@ -231,8 +257,10 @@ class MainWindow(QMainWindow):
         self.controls.first_frame_button.clicked.connect(self.go_to_first_frame)
         self.controls.last_frame_button.clicked.connect(self.go_to_last_frame)
         self.controls.playback_mode_button.clicked.connect(self.cycle_playback_mode)
+        self.controls.volume_changed.connect(self.handle_volume_change)
         self.timeline.position_changed.connect(self.seek_to_position)
         self.timeline.display_mode_changed.connect(self.set_time_display_mode)
+        self.timeline.markTourSpeedChanged.connect(self.set_mark_tour_speed)
         self.media_player.frameIndexChanged.connect(self.update_frame_counter)
         self.media_player.playStateChanged.connect(self.controls.set_play_state)
         self.media_player.playbackFinished.connect(self.handle_playback_finished)
@@ -241,6 +269,26 @@ class MainWindow(QMainWindow):
         self.media_player_2.fpsChanged.connect(lambda fps: self.update_fps_display(fps, 'B'))
         self.media_player.fileDropped.connect(self.handle_file_drop_on_player)
         self.playlist_widget.filesDroppedOnTarget.connect(self.handle_files_dropped)
+        self.playlist_widget.treeChanged.connect(self.update_total_duration)
+        self.playlist_widget.itemClicked.connect(self.on_tree_item_clicked)
+        self.mark_tour_timer.timeout.connect(self.advance_mark_tour)
+
+    def setup_shortcuts(self):
+        QShortcut(QKeySequence(Qt.Key_Space), self).activated.connect(self.toggle_play)
+        QShortcut(QKeySequence(Qt.Key_Left), self).activated.connect(self.previous_frame)
+        QShortcut(QKeySequence(Qt.Key_Right), self).activated.connect(self.next_frame)
+        QShortcut(QKeySequence(Qt.Key_Home), self).activated.connect(self.go_to_first_frame)
+        QShortcut(QKeySequence(Qt.Key_End), self).activated.connect(self.go_to_last_frame)
+        QShortcut(QKeySequence("Ctrl+Up"), self).activated.connect(self.play_previous_timeline_item)
+        QShortcut(QKeySequence("Ctrl+Down"), self).activated.connect(self.play_next_timeline_item)
+        QShortcut(QKeySequence(Qt.Key_F), self).activated.connect(self.toggle_mark_at_current_frame)
+        QShortcut(QKeySequence("Ctrl+Shift+M"), self).activated.connect(self.clear_all_marks)
+        QShortcut(QKeySequence(Qt.Key_BracketRight), self).activated.connect(self.jump_to_next_mark)
+        QShortcut(QKeySequence(Qt.Key_BracketLeft), self).activated.connect(self.jump_to_previous_mark)
+        QShortcut(QKeySequence(Qt.Key_L), self).activated.connect(self.toggle_marked_range_loop)
+        QShortcut(QKeySequence("Shift+]"), self).activated.connect(self.jump_and_play_next_mark)
+        QShortcut(QKeySequence("Shift+["), self).activated.connect(self.jump_and_play_previous_mark)
+        QShortcut(QKeySequence("Ctrl+Shift+P"), self).activated.connect(self.toggle_mark_tour)
 
     def handle_files_dropped(self, file_paths, target_item):
         self.add_files_to_source(file_paths)
@@ -266,6 +314,8 @@ class MainWindow(QMainWindow):
                     new_item = QTreeWidgetItem(drop_folder, [os.path.basename(file_path)])
                     new_item.setData(0, Qt.UserRole, file_path)
                     new_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled | Qt.ItemIsEditable)
+                    new_item.setToolTip(0, file_path)
+        self.update_total_duration()
 
     def show_tree_context_menu(self, pos):
         item = self.playlist_widget.itemAt(pos)
@@ -300,7 +350,102 @@ class MainWindow(QMainWindow):
         new_folder = QTreeWidgetItem(parent_item, [name])
         new_folder.setFlags(new_folder.flags() | Qt.ItemIsEditable | Qt.ItemIsDropEnabled | Qt.ItemIsDragEnabled)
         self.playlist_widget.editItem(new_folder, 0)
+
+    def format_duration(self, seconds):
+        if seconds is None or seconds < 0:
+            return "00:00:00"
+        secs = int(seconds)
+        mins, secs = divmod(secs, 60)
+        hours, mins = divmod(mins, 60)
+        return f"{hours:02d}:{mins:02d}:{secs:02d}"
+
+    def get_media_info(self, file_path):
+        if file_path in self.media_info_cache:
+            return self.media_info_cache[file_path]
+
+        if not file_path or not os.path.exists(file_path):
+            return (0.0, 0)
+
+        duration, frame_count = 0.0, 0
+        try:
+            image_extensions = ['.png', '.jpg', '.jpeg', '.bmp', '.tiff']
+            if any(file_path.lower().endswith(ext) for ext in image_extensions):
+                duration, frame_count = 0.0, 1
+            else:
+                cap = cv2.VideoCapture(file_path)
+                if cap.isOpened():
+                    fps = cap.get(cv2.CAP_PROP_FPS)
+                    f_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                    if fps > 0 and f_count > 0:
+                        duration = f_count / fps
+                        frame_count = f_count
+                cap.release()
+        except Exception as e:
+            print(f"Could not get info for {file_path}: {e}")
+            duration, frame_count = 0.0, 0
         
+        self.media_info_cache[file_path] = (duration, frame_count)
+        return (duration, frame_count)
+
+    def _sum_media_info_recursive(self, parent_item):
+        total_seconds, total_frames = 0.0, 0
+        for i in range(parent_item.childCount()):
+            child = parent_item.child(i)
+            path = child.data(0, Qt.UserRole)
+            if path:
+                duration, frames = self.get_media_info(path)
+                total_seconds += duration
+                total_frames += frames
+            
+            if child.childCount() > 0:
+                sub_seconds, sub_frames = self._sum_media_info_recursive(child)
+                total_seconds += sub_seconds
+                total_frames += sub_frames
+        return (total_seconds, total_frames)
+
+    def on_tree_item_clicked(self, item, column):
+        # Hanya hitung durasi jika item yang diklik adalah folder (tidak punya path file)
+        if item.data(0, Qt.UserRole) is None:
+            self.update_total_duration(item)
+
+    def update_total_duration(self, item_to_calculate=None):
+            # Jika tidak ada item spesifik yang diberikan, gunakan yang terakhir aktif
+            if item_to_calculate is None:
+                item_to_calculate = self.active_panel_for_duration
+            
+            # Jika masih tidak ada item target, hentikan fungsi
+            if not item_to_calculate:
+                return
+
+            # Simpan item yang sedang dihitung sebagai panel aktif
+            self.active_panel_for_duration = item_to_calculate
+
+            # Lakukan perhitungan rekursif mulai dari item yang diberikan
+            total_seconds, total_frames = self._sum_media_info_recursive(item_to_calculate)
+            duration_str = self.format_duration(total_seconds)
+            
+            # Tentukan label prefix ("Source" atau "Timeline") berdasarkan parent dari item
+            label_prefix = "Total Source"
+            parent = item_to_calculate
+            while parent:
+                if parent == self.timeline_item:
+                    label_prefix = "Total Timeline"
+                    break
+                parent = parent.parent()
+            
+            # Buat teks final untuk ditampilkan di status bar
+            final_text = ""
+            # Jika item yang dihitung adalah folder root, gunakan format lama
+            if item_to_calculate == self.source_item or item_to_calculate == self.timeline_item:
+                final_text = f"{label_prefix}: {duration_str} ({total_frames})"
+            else:
+                # Jika item adalah subfolder, tambahkan namanya untuk kejelasan
+                folder_name = item_to_calculate.text(0)
+                final_text = f"{label_prefix} [{folder_name}]: {duration_str} ({total_frames})"
+
+            # Perbarui teks label di status bar
+            self.total_duration_label.setText(final_text)
+
     def create_menu_bar(self):
         menubar = self.menuBar()
         file_menu = menubar.addMenu('File')
@@ -312,35 +457,99 @@ class MainWindow(QMainWindow):
         self.open_folder_action.setShortcut('Ctrl+Shift+O')
         self.open_folder_action.triggered.connect(self.open_image_sequence)
         file_menu.addAction(self.open_folder_action)
+        save_playlist_action = QAction('Save Playlist', self)
+        save_playlist_action.setShortcut('Ctrl+S')
+        save_playlist_action.triggered.connect(self.save_playlist)
+        file_menu.addAction(save_playlist_action)
+        load_playlist_action = QAction('Load Playlist', self)
+        load_playlist_action.setShortcut('Ctrl+L')
+        load_playlist_action.triggered.connect(self.load_playlist)
+        file_menu.addAction(load_playlist_action)
         file_menu.addSeparator()
         clear_action = QAction('Clear Project', self)
         clear_action.triggered.connect(self.clear_project_tree)
         file_menu.addAction(clear_action)
+        
         view_menu = menubar.addMenu('View')
         self.compare_action = QAction('Compare Mode', self)
         self.compare_action.setCheckable(True)
         self.compare_action.setShortcut('Ctrl+T')
         self.compare_action.triggered.connect(lambda: self.toggle_compare_mode(self.compare_action.isChecked()))
         view_menu.addAction(self.compare_action)
+        
         self.hide_playlist_action = QAction("Hide Project Panel", self)
         self.hide_playlist_action.setShortcut('Ctrl+H')
         self.hide_playlist_action.triggered.connect(self.toggle_playlist_panel)
         view_menu.addAction(self.hide_playlist_action)
         
+        view_menu.addSeparator()
+        show_shortcuts_action = QAction("View Shortcuts...", self)
+        show_shortcuts_action.triggered.connect(self.show_shortcuts_dialog)
+        view_menu.addAction(show_shortcuts_action)
+        
     def create_status_bar(self):
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
+        
+        style = "QLabel { color: #ffffff; font-weight: bold; font-size: 14px; padding: 2px 8px; background-color: #444444; border-radius: 3px; margin: 2px; }"
+        
+        self.total_duration_label = QLabel("Total Source: 00:00:00 (0)")
+        self.total_duration_label.setStyleSheet(style)
+        self.status_bar.addPermanentWidget(self.total_duration_label)
+
         self.frame_counter_label = QLabel("Frame: 0 / 0")
-        self.frame_counter_label.setStyleSheet("QLabel { color: #ffffff; font-weight: bold; font-size: 14px; padding: 2px 8px; background-color: #444444; border-radius: 3px; margin: 2px; }")
+        self.frame_counter_label.setStyleSheet(style)
         self.status_bar.addPermanentWidget(self.frame_counter_label)
+
         self.fps_label = QLabel("FPS: 0")
-        self.fps_label.setStyleSheet("QLabel { color: #ffffff; font-weight: bold; font-size: 14px; padding: 2px 8px; background-color: #444444; border-radius: 3px; margin: 2px; }")
+        self.fps_label.setStyleSheet(style)
         self.status_bar.addPermanentWidget(self.fps_label)
+        
         self.status_bar.setStyleSheet("QStatusBar { font-size: 12px; font-weight: bold; }")
         self.status_bar.showMessage("Ready")
         
+    def show_shortcuts_dialog(self):
+        shortcuts_text = """
+            <h3>Playback</h3>
+            <b>Space</b>: Play / Pause<br>
+            <b>Right Arrow</b>: Next Frame<br>
+            <b>Left Arrow</b>: Previous Frame<br>
+            <b>Home</b>: Go to First Frame<br>
+            <b>End</b>: Go to Last Frame<br>
+
+            <h3>Timeline Navigation</h3>
+            <b>Ctrl + Down Arrow</b>: Play Next Item in Timeline<br>
+            <b>Ctrl + Up Arrow</b>: Play Previous Item in Timeline<br>
+
+            <h3>Marking</h3>
+            <b>F</b>: Toggle Mark at Current Frame<br>
+            <b>Ctrl + Shift + M</b>: Clear All Marks<br>
+            <b>]</b>: Jump to Next Mark<br>
+            <b>[</b>: Jump to Previous Mark<br>
+            <b>Shift + ]</b>: Jump and Play to Next Mark<br>
+            <b>Shift + [</b>: Jump and Play to Previous Mark<br>
+            <b>L</b>: Toggle Loop for Marked Range<br>
+            <b>Ctrl + Shift + P</b>: Start / Stop Mark Tour (Looping)<br>
+
+            <h3>File</h3>
+            <b>Ctrl + O</b>: Open File<br>
+            <b>Ctrl + Shift + O</b>: Open Image Sequence<br>
+            <b>Ctrl + S</b>: Save Playlist<br>
+            <b>Ctrl + L</b>: Load Playlist<br>
+
+            <h3>View</h3>
+            <b>Ctrl + T</b>: Toggle Compare Mode<br>
+            <b>Ctrl + H</b>: Show / Hide Project Panel<br>
+        """
+        QMessageBox.information(
+            self,
+            "Keyboard Shortcuts",
+            shortcuts_text
+        )
+
     def handle_file_drop_on_player(self, file_path, target_view):
         self.add_files_to_source([file_path])
+        self.update_total_duration()
         if not self.compare_mode:
             self.load_single_file(file_path)
         else:
@@ -355,15 +564,25 @@ class MainWindow(QMainWindow):
         for item in list(selected_items):
             if item.parent():
                 item.parent().removeChild(item)
+        self.update_total_duration()
     
     def set_playback_mode(self, mode):
         self.playback_mode = mode
-        if mode == PlaybackMode.LOOP:
-            self.controls.set_playback_mode_state("🔁", "Playback Mode: Loop")
-        elif mode == PlaybackMode.PLAY_NEXT:
-            self.controls.set_playback_mode_state("⤵️", "Playback Mode: Play Next (Timeline only)")
-        elif mode == PlaybackMode.PLAY_ONCE:
-            self.controls.set_playback_mode_state("➡️|", "Playback Mode: Play Once")
+        
+        if mode != PlaybackMode.LOOP_MARKED_RANGE:
+            self.loop_in_point = None
+            self.loop_out_point = None
+            if mode == PlaybackMode.LOOP:
+                self.controls.set_playback_mode_state("🔁", "Playback Mode: Loop")
+            elif mode == PlaybackMode.PLAY_NEXT:
+                self.controls.set_playback_mode_state("⤵️", "Playback Mode: Play Next (Timeline only)")
+            elif mode == PlaybackMode.PLAY_ONCE:
+                self.controls.set_playback_mode_state("➡️|", "Playback Mode: Play Once")
+        else:
+            if self.loop_in_point is not None and self.loop_out_point is not None:
+                 self.controls.set_playback_mode_state("[🔁]", f"Playback Mode: Loop Range ({self.loop_in_point+1} - {self.loop_out_point+1})")
+
+        self.media_player.set_loop_range(self.loop_in_point, self.loop_out_point)
 
     def cycle_playback_mode(self):
         if self.playback_mode == PlaybackMode.LOOP:
@@ -372,7 +591,48 @@ class MainWindow(QMainWindow):
             self.set_playback_mode(PlaybackMode.PLAY_ONCE)
         else:
             self.set_playback_mode(PlaybackMode.LOOP)
-            
+
+    def toggle_marked_range_loop(self):
+        if self.playback_mode == PlaybackMode.LOOP_MARKED_RANGE:
+            self.set_playback_mode(PlaybackMode.LOOP)
+            self.status_bar.showMessage("Marked range loop disabled.", 2000)
+            return
+
+        if len(self.marks) < 2:
+            self.status_bar.showMessage("Cannot set loop range. Please add at least two marks.", 3000)
+            return
+        
+        current_frame = self.media_player.current_frame_index
+        
+        start_mark = None
+        for mark in reversed(self.marks):
+            if mark <= current_frame:
+                start_mark = mark
+                break
+        
+        if start_mark is None:
+            start_mark = self.marks[0]
+
+        end_mark = None
+        try:
+            start_index = self.marks.index(start_mark)
+            if start_index < len(self.marks) - 1:
+                end_mark = self.marks[start_index + 1]
+            else:
+                self.status_bar.showMessage("Cannot start loop from the last mark.", 3000)
+                return
+        except ValueError:
+            return 
+
+        if start_mark is not None and end_mark is not None:
+            self.loop_in_point = start_mark
+            self.loop_out_point = end_mark
+            self.set_playback_mode(PlaybackMode.LOOP_MARKED_RANGE)
+            self.status_bar.showMessage(f"Looping between frame {start_mark + 1} and {end_mark + 1}.", 3000)
+
+    def handle_volume_change(self, value):
+        self.media_player.set_volume(value)
+
     def handle_playback_finished(self):
         if self.is_compare_playing:
             self.is_compare_playing = False
@@ -395,13 +655,138 @@ class MainWindow(QMainWindow):
         folder_path = QFileDialog.getExistingDirectory(self, "Select Folder", "")
         if folder_path: pass
         
+    def save_playlist(self):
+        default_path = self.last_playlist_path or os.getcwd()
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Playlist",
+            default_path,
+            "Kenae Playlist (*.kenae)"
+        )
+        if not file_path:
+            return
+        if not file_path.lower().endswith(".kenae"):
+            file_path += ".kenae"
+        base_dir = os.path.dirname(file_path)
+        playlist_data = {
+            "version": 1,
+            "source": self._serialize_playlist_branch(self.source_item, base_dir),
+            "timeline": self._serialize_playlist_branch(self.timeline_item, base_dir),
+        }
+        try:
+            with open(file_path, "w", encoding="utf-8") as handle:
+                json.dump(playlist_data, handle, indent=2)
+        except OSError as exc:
+            QMessageBox.critical(self, "Save Playlist Failed", f"Tidak bisa menyimpan playlist:\n{exc}")
+            return
+        self.last_playlist_path = file_path
+        self.status_bar.showMessage(f"Playlist saved: {os.path.basename(file_path)}", 4000)
+
+    def load_playlist(self):
+        default_path = self.last_playlist_path or os.getcwd()
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Load Playlist",
+            default_path,
+            "Kenae Playlist (*.kenae)"
+        )
+        if not file_path:
+            return
+        try:
+            with open(file_path, "r", encoding="utf-8") as handle:
+                playlist_data = json.load(handle)
+        except (OSError, json.JSONDecodeError) as exc:
+            QMessageBox.critical(self, "Load Playlist Failed", f"Tidak bisa membuka playlist:\n{exc}")
+            return
+
+        self.clear_project_tree()
+        base_dir = os.path.dirname(file_path)
+        self._load_playlist_branch(self.source_item, playlist_data.get("source", []), base_dir)
+        self._load_playlist_branch(self.timeline_item, playlist_data.get("timeline", []), base_dir)
+        self.source_item.setExpanded(True)
+        self.timeline_item.setExpanded(True)
+        self.playlist_widget.expandAll()
+        self.last_playlist_path = file_path
+        missing = self._count_missing_entries(self.source_item) + self._count_missing_entries(self.timeline_item)
+        if missing:
+            self.status_bar.showMessage(f"Playlist loaded dengan {missing} file yang belum ditemukan", 5000)
+        else:
+            self.status_bar.showMessage(f"Playlist loaded: {os.path.basename(file_path)}", 4000)
+        self.update_playlist_item_indicator()
+        self.active_panel_for_duration = self.source_item
+        self.update_total_duration()
+
+    def _serialize_playlist_branch(self, parent_item, base_dir):
+        return [self._serialize_playlist_item(parent_item.child(i), base_dir) for i in range(parent_item.childCount())]
+
+    def _serialize_playlist_item(self, item, base_dir):
+        node = {"name": item.text(0)}
+        path = item.data(0, Qt.UserRole)
+        if path:
+            node["path"] = path
+            try:
+                node["relative_path"] = os.path.relpath(path, base_dir)
+            except ValueError:
+                pass
+        children = [self._serialize_playlist_item(item.child(i), base_dir) for i in range(item.childCount())]
+        if children:
+            node["children"] = children
+        return node
+
+    def _load_playlist_branch(self, parent_item, nodes, base_dir):
+        for node in nodes:
+            item = QTreeWidgetItem(parent_item, [node.get("name", "Untitled")])
+            resolved_path = self._resolve_playlist_path(node, base_dir)
+            if resolved_path:
+                item.setData(0, Qt.UserRole, resolved_path)
+                item.setToolTip(0, resolved_path)
+                if not os.path.exists(resolved_path):
+                    item.setForeground(0, QColor("#ff8a80"))
+            else:
+                item.setData(0, Qt.UserRole, None)
+            flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled | Qt.ItemIsEditable
+            if not resolved_path:
+                flags |= Qt.ItemIsDropEnabled
+            item.setFlags(flags)
+            children = node.get("children", [])
+            if children:
+                self._load_playlist_branch(item, children, base_dir)
+
+    def _resolve_playlist_path(self, node, base_dir):
+        candidates = []
+        relative = node.get("relative_path")
+        if relative:
+            candidates.append(os.path.abspath(os.path.join(base_dir, relative)))
+        path = node.get("path")
+        if path:
+            candidates.append(os.path.abspath(path))
+        seen = set()
+        for candidate in candidates:
+            if not candidate or candidate in seen:
+                continue
+            seen.add(candidate)
+            if os.path.exists(candidate):
+                return candidate
+        return candidates[0] if candidates else None
+
+    def _count_missing_entries(self, parent_item):
+        missing = 0
+        for i in range(parent_item.childCount()):
+            child = parent_item.child(i)
+            path = child.data(0, Qt.UserRole)
+            if path and not os.path.exists(path):
+                missing += 1
+            missing += self._count_missing_entries(child)
+        return missing
+        
     def add_files_to_source(self, file_paths):
         for path in file_paths:
             if os.path.exists(path) and not self.find_item_by_path_recursive(path, self.source_item):
                 item = QTreeWidgetItem(self.source_item, [os.path.basename(path)])
                 item.setData(0, Qt.UserRole, path)
                 item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled | Qt.ItemIsEditable)
-                
+                item.setToolTip(0, path)
+        
     def clear_project_tree(self):
         self.playlist_widget.clear()
         self.source_item = QTreeWidgetItem(self.playlist_widget, ["Source"])
@@ -419,8 +804,13 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage("Project cleared")
         self.update_playlist_item_indicator()
         self.clear_all_marks()
+        self.media_info_cache.clear()
+        self.active_panel_for_duration = self.source_item
+        self.update_total_duration()
         
     def toggle_play(self):
+        if self.is_mark_tour_active: self.toggle_mark_tour()
+        
         if self.compare_mode:
             if self.is_compare_playing:
                 self.compare_timer.stop()
@@ -445,9 +835,10 @@ class MainWindow(QMainWindow):
         self.media_player.next_frame()
         self.media_player_2.next_frame()
         self.update_composite_view()
-        at_end_a = self.media_player.current_frame_index >= self.media_player.total_frames - 1
-        at_end_b = self.media_player_2.current_frame_index >= self.media_player_2.total_frames - 1
-        if (at_end_a and self.media_player.total_frames > 0) or (at_end_b and self.media_player_2.total_frames > 0):
+        finished_a = not self.media_player.has_media() or self.media_player.current_frame_index >= self.media_player.total_frames - 1
+        finished_b = not self.media_player_2.has_media() or self.media_player_2.current_frame_index >= self.media_player_2.total_frames - 1
+        
+        if finished_a and finished_b:
             self.compare_timer.stop()
             self.handle_playback_finished()
             
@@ -466,13 +857,15 @@ class MainWindow(QMainWindow):
             self.update_composite_view()
             
     def seek_to_position(self, position):
+        if self.is_mark_tour_active: self.toggle_mark_tour()
         self.media_player.seek_to_position(position)
         if self.compare_mode:
             self.media_player_2.seek_to_position(position)
             self.update_composite_view()
             
     def update_frame_counter(self, current_frame, total_frames):
-        if self.compare_mode: return
+        if self.compare_mode:
+            return
         if total_frames <= 0:
             self.frame_counter_label.setText("No Media")
             self.timeline.set_duration(0)
@@ -483,21 +876,6 @@ class MainWindow(QMainWindow):
         
     def update_frame_counter_B(self, cf, tf): pass
     
-    def setup_shortcuts(self):
-        QShortcut(QKeySequence(Qt.Key_Space), self).activated.connect(self.toggle_play)
-        QShortcut(QKeySequence(Qt.Key_Left), self).activated.connect(self.previous_frame)
-        QShortcut(QKeySequence(Qt.Key_Right), self).activated.connect(self.next_frame)
-        QShortcut(QKeySequence(Qt.Key_Home), self).activated.connect(self.go_to_first_frame)
-        QShortcut(QKeySequence(Qt.Key_End), self).activated.connect(self.go_to_last_frame)
-        QShortcut(QKeySequence("Ctrl+Up"), self).activated.connect(self.play_previous_timeline_item)
-        QShortcut(QKeySequence("Ctrl+Down"), self).activated.connect(self.play_next_timeline_item)
-        # --- PERUBAHAN SHORTCUT MARKING ---
-        QShortcut(QKeySequence(Qt.Key_F), self).activated.connect(self.toggle_mark_at_current_frame)
-        QShortcut(QKeySequence("Ctrl+Shift+M"), self).activated.connect(self.clear_all_marks)
-        # --- SHORTCUT BARU UNTUK LOMPAT ANTAR MARK ---
-        QShortcut(QKeySequence(Qt.Key_BracketRight), self).activated.connect(self.jump_to_next_mark)
-        QShortcut(QKeySequence(Qt.Key_BracketLeft), self).activated.connect(self.jump_to_previous_mark)
-
     def toggle_mark_at_current_frame(self):
         if not self.media_player.has_media(): return
         current_frame = self.media_player.current_frame_index
@@ -516,9 +894,7 @@ class MainWindow(QMainWindow):
         self.timeline.set_marks(self.marks)
         self.status_bar.showMessage("All marks cleared", 2000)
         
-    # --- FUNGSI BARU UNTUK LOMPAT ANTAR MARK ---
     def jump_to_next_mark(self):
-        """Melompat ke penanda berikutnya."""
         if not self.marks: return
         current_frame = self.media_player.current_frame_index
         next_mark = None
@@ -526,13 +902,12 @@ class MainWindow(QMainWindow):
             if mark > current_frame:
                 next_mark = mark
                 break
-        # Jika tidak ada marker berikutnya, lompat ke marker pertama (looping)
-        if next_mark is None:
+        if next_mark is None and self.marks:
             next_mark = self.marks[0]
-        self.seek_to_position(next_mark)
+        if next_mark is not None:
+            self.media_player.seek_to_position(next_mark)
 
     def jump_to_previous_mark(self):
-        """Melompat ke penanda sebelumnya."""
         if not self.marks: return
         current_frame = self.media_player.current_frame_index
         prev_mark = None
@@ -540,12 +915,71 @@ class MainWindow(QMainWindow):
             if mark < current_frame:
                 prev_mark = mark
                 break
-        # Jika tidak ada marker sebelumnya, lompat ke marker terakhir (looping)
-        if prev_mark is None:
+        if prev_mark is None and self.marks:
             prev_mark = self.marks[-1]
-        self.seek_to_position(prev_mark)
-    # --- AKHIR FUNGSI BARU ---
+        if prev_mark is not None:
+            self.media_player.seek_to_position(prev_mark)
+            
+    def jump_and_play_next_mark(self):
+        self.jump_to_next_mark()
+        if not self.media_player.is_playing:
+            QTimer.singleShot(50, self.toggle_play)
 
+    def jump_and_play_previous_mark(self):
+        self.jump_to_previous_mark()
+        if not self.media_player.is_playing:
+            QTimer.singleShot(50, self.toggle_play)
+
+    def toggle_mark_tour(self):
+        if self.is_mark_tour_active:
+            self.is_mark_tour_active = False
+            self.mark_tour_timer.stop()
+            self.status_bar.showMessage("Mark tour stopped.", 3000)
+        else:
+            if not self.marks:
+                self.status_bar.showMessage("No marks available to start a tour.", 3000)
+                return
+            
+            if self.playback_mode == PlaybackMode.LOOP_MARKED_RANGE:
+                self.set_playback_mode(PlaybackMode.LOOP)
+            
+            if self.media_player.is_playing:
+                self.toggle_play()
+
+            self.is_mark_tour_active = True
+            self.current_mark_tour_index = 0
+            self.status_bar.showMessage("Mark tour started (looping). Press Ctrl+Shift+P to stop.", 5000)
+            self.show_current_mark_frame()
+
+    def show_current_mark_frame(self):
+        if not self.is_mark_tour_active or not self.marks:
+            return
+
+        if self.media_player.is_playing:
+            self.toggle_play()
+
+        target_frame = self.marks[self.current_mark_tour_index]
+        self.media_player.seek_to_position(target_frame)
+        
+        self.mark_tour_timer.start(self.mark_tour_speed_ms)
+
+    def advance_mark_tour(self):
+        if not self.is_mark_tour_active:
+            return
+        
+        self.current_mark_tour_index += 1
+        if self.current_mark_tour_index >= len(self.marks):
+            self.current_mark_tour_index = 0
+        
+        self.show_current_mark_frame()
+
+    def set_mark_tour_speed(self, speed_ms):
+        """Slot untuk menerima kecepatan mark tour baru dari widget timeline."""
+        self.mark_tour_speed_ms = speed_ms
+        speed_s = speed_ms / 1000.0
+        self.status_bar.showMessage(f"Mark tour speed set to {speed_s} seconds.", 3000)
+        self.timeline.current_mark_tour_speed = speed_ms
+    
     def find_item_by_path_recursive(self, path, root_item):
         if not path or not root_item: return None
         iterator = QTreeWidgetItemIterator(root_item)
@@ -632,8 +1066,14 @@ class MainWindow(QMainWindow):
             self.is_compare_playing = False
         self.clear_all_marks()
         success = self.media_player.load_media(file_path)
-        if success: self.status_bar.showMessage(f"Loaded: {os.path.basename(file_path)}")
-        else: self.status_bar.showMessage(f"Failed to load file")
+        self.media_player.set_compare_split()
+        if success:
+            self.status_bar.showMessage(f"Loaded: {os.path.basename(file_path)}")
+            duration, frames = self.get_media_info(file_path)
+            self.total_duration_label.setText(f"Duration: {self.format_duration(duration)} ({frames})")
+        else:
+            self.status_bar.showMessage(f"Failed to load file")
+            self.update_total_duration()
         self.update_playlist_item_indicator()
             
     def load_compare_files(self, file1, file2):
@@ -643,6 +1083,14 @@ class MainWindow(QMainWindow):
         f1 = os.path.basename(file1) if file1 else "Empty"
         f2 = os.path.basename(file2) if file2 else "Empty"
         self.status_bar.showMessage(f"Comparing: {f1} vs {f2}")
+        
+        dur1, frames1 = self.get_media_info(file1) if file1 else (0, 0)
+        dur2, frames2 = self.get_media_info(file2) if file2 else (0, 0)
+        dur1_str = self.format_duration(dur1)
+        dur2_str = self.format_duration(dur2)
+        
+        self.total_duration_label.setText(f"A: {dur1_str} ({frames1}) | B: {dur2_str} ({frames2})")
+        
         QTimer.singleShot(50, self.update_composite_view)
         self.update_playlist_item_indicator()
         
@@ -658,16 +1106,31 @@ class MainWindow(QMainWindow):
                 self.is_compare_playing = False
             self.media_player_2.clear_media()
             self.media_player.display_frame(self.media_player.current_frame)
+            self.media_player.set_compare_split()
+            
+            current_path = self.media_player.get_current_file_path()
+            if current_path:
+                duration, frames = self.get_media_info(current_path)
+                self.total_duration_label.setText(f"Duration: {self.format_duration(duration)} ({frames})")
+            else:
+                self.update_total_duration()
+
         self.update_playlist_item_indicator()
             
     def update_composite_view(self):
         frame_a = self.media_player.current_frame
         frame_b = self.media_player_2.current_frame
-        total_f = self.media_player.total_frames if self.media_player.has_media() else self.media_player_2.total_frames
-        current_f = self.media_player.current_frame_index if self.media_player.has_media() else self.media_player_2.current_frame_index
+        total_f = max(self.media_player.total_frames, self.media_player_2.total_frames)
+        current_f = max(self.media_player.current_frame_index, self.media_player_2.current_frame_index)
+
         self.timeline.set_duration(total_f)
         self.timeline.set_position(current_f)
-        self.frame_counter_label.setText(f"Frame: {current_f + 1} / {total_f}")
+        
+        if total_f > 0 and current_f >= 0:
+            self.frame_counter_label.setText(f"Frame: {current_f + 1} / {total_f}")
+        else:
+            self.frame_counter_label.setText("No Media")
+            
         h_a, w_a = (frame_a.shape[0], frame_a.shape[1]) if frame_a is not None else (480, 640)
         h_b, w_b = (frame_b.shape[0], frame_b.shape[1]) if frame_b is not None else (480, 640)
         if frame_a is None: frame_a = self.create_placeholder_frame("View A", w_a, h_a)
@@ -678,6 +1141,7 @@ class MainWindow(QMainWindow):
         new_w_b = int(frame_b.shape[1] * (target_h / frame_b.shape[0])) if frame_b.shape[0] > 0 else 0
         frame_a_res = cv2.resize(frame_a, (new_w_a, target_h), interpolation=cv2.INTER_AREA) if new_w_a > 0 else np.zeros((target_h, 1, 3), dtype=np.uint8)
         frame_b_res = cv2.resize(frame_b, (new_w_b, target_h), interpolation=cv2.INTER_AREA) if new_w_b > 0 else np.zeros((target_h, 1, 3), dtype=np.uint8)
+        self.media_player.set_compare_split(frame_a_res.shape[1], frame_b_res.shape[1])
         composite = cv2.hconcat([frame_a_res, frame_b_res])
         self.media_player.display_frame(composite)
         
