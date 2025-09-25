@@ -1,10 +1,11 @@
-from PyQt5.QtWidgets import QWidget, QMenu, QAction
+from PyQt5.QtWidgets import QWidget, QMenu, QAction, QActionGroup
 from PyQt5.QtCore import Qt, QPoint, pyqtSignal
 from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont
 
 class TimelineWidget(QWidget):
     position_changed = pyqtSignal(int)
     display_mode_changed = pyqtSignal(bool)
+    markTourSpeedChanged = pyqtSignal(int)
     
     def __init__(self):
         super().__init__()
@@ -17,6 +18,7 @@ class TimelineWidget(QWidget):
         self.marks = []
         self.fps = 0.0
         self.show_timecode = False
+        self.current_mark_tour_speed = 1500
         self.setFixedHeight(44)
         self.setStyleSheet("""
             QWidget {
@@ -46,6 +48,10 @@ class TimelineWidget(QWidget):
         self.show_timecode = enabled
         self.update()
 
+    def _emit_speed_change(self, speed_ms):
+        self.current_mark_tour_speed = speed_ms
+        self.markTourSpeedChanged.emit(speed_ms)
+
     def show_context_menu(self, pos):
         context_menu = QMenu(self)
         
@@ -62,17 +68,58 @@ class TimelineWidget(QWidget):
         frame_action.triggered.connect(lambda: self.display_mode_changed.emit(False))
         timecode_action.triggered.connect(lambda: self.display_mode_changed.emit(True))
 
+        context_menu.addSeparator()
+
+        speed_menu = context_menu.addMenu("Mark Tour Speed")
+        speed_group = QActionGroup(self)
+        speed_group.setExclusive(True)
+
+        speeds = {
+            "Slowest (3s)": 3000,
+            "Slow (2s)": 2000,
+            "Normal (1.5s)": 1500,
+            "Fast (1s)": 1000,
+            "Faster (0.5s)": 500,
+            "Very Fast (0.25s)": 250,
+            "Super Fast (0.1s)": 100,
+            "Hyper (0.05s)": 50,
+            "Max (~60fps)": 16
+        }
+
+        for text, speed_ms in speeds.items():
+            action = QAction(text, self)
+            action.setCheckable(True)
+            action.setData(speed_ms)
+            action.triggered.connect(lambda checked, s=speed_ms: self._emit_speed_change(s))
+            if self.current_mark_tour_speed == speed_ms:
+                action.setChecked(True)
+            speed_menu.addAction(action)
+            speed_group.addAction(action)
+
         context_menu.exec_(self.mapToGlobal(pos))
+
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         
+        # 1. Gambar latar belakang
         painter.setBrush(QBrush(QColor("#3a3a3a")))
         painter.setPen(Qt.NoPen)
         painter.drawRect(self.rect())
         
         if self.duration > 0:
+            # --- PERUBAHAN URUTAN GAMBAR ---
+            # 2. Gambar semua garis penanda (marks) terlebih dahulu
+            painter.setPen(QPen(QColor("#ffffff"), 2))
+            for mark_frame in self.marks:
+                if self.duration > 1:
+                    mark_x = (mark_frame / (self.duration - 1)) * self.width()
+                else:
+                    mark_x = 0
+                painter.drawLine(int(mark_x), 10, int(mark_x), self.height())
+
+            # 3. Setelah itu, gambar playhead dan labelnya agar berada di lapisan atas
             marker_x = (self.current_position / (self.duration - 1)) * self.width() if self.duration > 1 else 0
 
             painter.setPen(QPen(QColor("#ffffff"), 2))
@@ -102,14 +149,6 @@ class TimelineWidget(QWidget):
                 painter.drawText(bubble_x, bubble_y, bubble_width, bubble_height,
                                  Qt.AlignCenter | Qt.AlignVCenter, display_text)
 
-            painter.setPen(QPen(QColor("#ffffff"), 2))
-
-            for mark_frame in self.marks:
-                if self.duration > 1:
-                    mark_x = (mark_frame / (self.duration - 1)) * self.width()
-                else:
-                    mark_x = 0
-                painter.drawLine(int(mark_x), 10, int(mark_x), self.height())
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -134,8 +173,7 @@ class TimelineWidget(QWidget):
         if self.duration <= 0 or self.current_position < 0:
             return ""
         frame_current = self.current_position + 1
-        frame_total = self.duration
-        frame_text = f"{frame_current:,} / {frame_total:,}"
+        
         if self.show_timecode and self.fps > 0:
             total_seconds = self.current_position / self.fps
             minutes = int(total_seconds // 60)
@@ -150,5 +188,6 @@ class TimelineWidget(QWidget):
                     seconds = 0
                     minutes += 1
             time_text = f"{minutes:02d}:{seconds:02d}.{frames:02d}"
-            return f"{time_text}  ({frame_text})"
-        return frame_text
+            return time_text
+            
+        return f"{frame_current:,}"
