@@ -4,6 +4,7 @@ import glob
 import json
 import cv2
 import numpy as np
+import re # <-- PASTIKAN IMPORT INI ADA DI ATAS FILE
 from enum import Enum, auto
 from PyQt5.QtWidgets import (QMainWindow, QVBoxLayout, QWidget, QMenuBar, QAction, QMenu,
                             QFileDialog, QHBoxLayout, QStatusBar, QLabel, QSplitter,
@@ -290,8 +291,93 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Shift+["), self).activated.connect(self.jump_and_play_previous_mark)
         QShortcut(QKeySequence("Ctrl+Shift+P"), self).activated.connect(self.toggle_mark_tour)
 
-    def handle_files_dropped(self, file_paths, target_item):
-        self.add_files_to_source(file_paths)
+    def _resolve_sequences_and_files(self, file_paths):
+        """
+        Menganalisis daftar path file, mendeteksi sekuens gambar, dan
+        menggabungkannya menjadi satu path berformat printf-style (misal: 'frame.%04d.jpg').
+        File yang bukan bagian dari sekuens akan dikembalikan apa adanya.
+        """
+        image_extensions = ['.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.exr', '.dpx']
+        processed_files = set()
+        resolved_paths = []
+
+        # Urutkan file untuk memastikan kita memproses frame pertama dari sebuah sekuens
+        sorted_paths = sorted(file_paths)
+
+        for path in sorted_paths:
+            if path in processed_files:
+                continue
+
+            # Hanya proses file gambar
+            is_image = any(path.lower().endswith(ext) for ext in image_extensions)
+            if not is_image:
+                resolved_paths.append(path)
+                processed_files.add(path)
+                continue
+
+            dirname = os.path.dirname(path)
+            filename = os.path.basename(path)
+            
+            # Gunakan regular expression untuk menemukan pola 'nama.nomor.ext'
+            match = re.match(r'^(.*?)(\d+)(\.[^.]+)$', filename)
+
+            if not match:
+                resolved_paths.append(path)
+                processed_files.add(path)
+                continue
+            
+            base_name, number_str, extension = match.groups()
+            padding = len(number_str)
+
+            # Cari semua file di direktori yang cocok dengan pola sekuens
+            sequence_files = []
+            frame_numbers = []
+            
+            try:
+                all_files_in_dir = os.listdir(dirname)
+            except OSError:
+                # Jika direktori tidak bisa diakses, anggap sebagai file biasa
+                resolved_paths.append(path)
+                processed_files.add(path)
+                continue
+
+            for f in all_files_in_dir:
+                seq_match = re.match(r'^(.*?)(\d+)(\.[^.]+)$', f)
+                if seq_match:
+                    s_base, s_num_str, s_ext = seq_match.groups()
+                    if s_base == base_name and s_ext.lower() == extension.lower() and len(s_num_str) == padding:
+                        sequence_files.append(os.path.join(dirname, f))
+                        frame_numbers.append(int(s_num_str))
+
+            if len(sequence_files) > 1:
+                # Ditemukan sekuens! Buat path berformat printf
+                min_frame, max_frame = min(frame_numbers), max(frame_numbers)
+                
+                # Buat nama tampilan yang ramah pengguna
+                display_name = f"{base_name}[{min_frame:0{padding}d}-{max_frame:0{padding}d}]{extension}"
+                
+                # Buat path asli untuk OpenCV
+                sequence_pattern_path = os.path.join(dirname, f"{base_name}%0{padding}d{extension}")
+                
+                # Gunakan tuple untuk menyimpan keduanya
+                resolved_paths.append((sequence_pattern_path, display_name))
+                processed_files.update(sequence_files)
+            else:
+                # Bukan sekuens, hanya file biasa
+                resolved_paths.append(path)
+                processed_files.add(path)
+        
+        return resolved_paths
+
+    def handle_files_dropped(self, dropped_paths, target_item):
+        # Panggil resolver di awal untuk memproses path yang di-drop
+        resolved_media = self._resolve_sequences_and_files(dropped_paths)
+        
+        if not resolved_media:
+            return
+
+        self.add_files_to_source(resolved_media)
+
         is_in_timeline = False
         if target_item:
             parent = target_item
@@ -300,21 +386,31 @@ class MainWindow(QMainWindow):
                     is_in_timeline = True
                     break
                 parent = parent.parent()
+        
         if is_in_timeline:
             drop_folder = target_item
             if target_item.data(0, Qt.UserRole) is not None:
                 drop_folder = target_item.parent()
-            for file_path in file_paths:
+
+            for media_item in resolved_media:
+                # Ekstrak path dan nama tampilan
+                if isinstance(media_item, tuple):
+                    file_path, display_name = media_item
+                else:
+                    file_path, display_name = media_item, os.path.basename(media_item)
+
                 is_duplicate = False
                 for i in range(drop_folder.childCount()):
                     if drop_folder.child(i).data(0, Qt.UserRole) == file_path:
                         is_duplicate = True
                         break
+                
                 if not is_duplicate:
-                    new_item = QTreeWidgetItem(drop_folder, [os.path.basename(file_path)])
-                    new_item.setData(0, Qt.UserRole, file_path)
+                    new_item = QTreeWidgetItem(drop_folder, [display_name]) # Gunakan nama tampilan
+                    new_item.setData(0, Qt.UserRole, file_path) # Simpan path asli
                     new_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled | Qt.ItemIsEditable)
-                    new_item.setToolTip(0, file_path)
+                    new_item.setToolTip(0, file_path) # Tooltip menunjukkan path asli
+
         self.update_total_duration()
 
     def show_tree_context_menu(self, pos):
@@ -363,13 +459,14 @@ class MainWindow(QMainWindow):
         if file_path in self.media_info_cache:
             return self.media_info_cache[file_path]
 
-        if not file_path or not os.path.exists(file_path):
+        if not file_path or (not os.path.exists(file_path) and '%' not in file_path):
             return (0.0, 0)
 
         duration, frame_count = 0.0, 0
         try:
             image_extensions = ['.png', '.jpg', '.jpeg', '.bmp', '.tiff']
-            if any(file_path.lower().endswith(ext) for ext in image_extensions):
+            # Cek jika ini bukan sekuens gambar tapi file gambar tunggal
+            if '%' not in file_path and any(file_path.lower().endswith(ext) for ext in image_extensions):
                 duration, frame_count = 0.0, 1
             else:
                 cap = cv2.VideoCapture(file_path)
@@ -409,22 +506,17 @@ class MainWindow(QMainWindow):
             self.update_total_duration(item)
 
     def update_total_duration(self, item_to_calculate=None):
-            # Jika tidak ada item spesifik yang diberikan, gunakan yang terakhir aktif
             if item_to_calculate is None:
                 item_to_calculate = self.active_panel_for_duration
             
-            # Jika masih tidak ada item target, hentikan fungsi
             if not item_to_calculate:
                 return
 
-            # Simpan item yang sedang dihitung sebagai panel aktif
             self.active_panel_for_duration = item_to_calculate
 
-            # Lakukan perhitungan rekursif mulai dari item yang diberikan
             total_seconds, total_frames = self._sum_media_info_recursive(item_to_calculate)
             duration_str = self.format_duration(total_seconds)
             
-            # Tentukan label prefix ("Source" atau "Timeline") berdasarkan parent dari item
             label_prefix = "Total Source"
             parent = item_to_calculate
             while parent:
@@ -433,17 +525,13 @@ class MainWindow(QMainWindow):
                     break
                 parent = parent.parent()
             
-            # Buat teks final untuk ditampilkan di status bar
             final_text = ""
-            # Jika item yang dihitung adalah folder root, gunakan format lama
             if item_to_calculate == self.source_item or item_to_calculate == self.timeline_item:
                 final_text = f"{label_prefix}: {duration_str} ({total_frames})"
             else:
-                # Jika item adalah subfolder, tambahkan namanya untuk kejelasan
                 folder_name = item_to_calculate.text(0)
                 final_text = f"{label_prefix} [{folder_name}]: {duration_str} ({total_frames})"
 
-            # Perbarui teks label di status bar
             self.total_duration_label.setText(final_text)
 
     def create_menu_bar(self):
@@ -546,17 +634,25 @@ class MainWindow(QMainWindow):
             "Keyboard Shortcuts",
             shortcuts_text
         )
-
+    
     def handle_file_drop_on_player(self, file_path, target_view):
-        self.add_files_to_source([file_path])
+        resolved_media = self._resolve_sequences_and_files([file_path])
+        if not resolved_media:
+            return
+
+        self.add_files_to_source(resolved_media)
         self.update_total_duration()
+
+        item_to_load = resolved_media[0]
+        path_to_load = item_to_load[0] if isinstance(item_to_load, tuple) else item_to_load
+
         if not self.compare_mode:
-            self.load_single_file(file_path)
+            self.load_single_file(path_to_load)
         else:
             if target_view == 'A':
-                self.load_compare_files(file_path, self.media_player_2.get_current_file_path())
+                self.load_compare_files(path_to_load, self.media_player_2.get_current_file_path())
             else:
-                self.load_compare_files(self.media_player.get_current_file_path(), file_path)
+                self.load_compare_files(self.media_player.get_current_file_path(), path_to_load)
                 
     def delete_selected_items_handler(self):
         selected_items = self.playlist_widget.selectedItems()
@@ -647,9 +743,14 @@ class MainWindow(QMainWindow):
             if item: self.play_next_timeline_item()
             
     def open_file(self):
-        file_paths, _ = QFileDialog.getOpenFileNames(self, "Open Media File", "", "Media Files (*.mp4 *.avi *.mov *.mkv *.jpg *.png);;All Files (*)")
+        file_paths, _ = QFileDialog.getOpenFileNames(self, "Open Media File", "", "Media Files (*.mp4 *.avi *.mov *.mkv *.jpg *.png *.jpeg *.bmp *.tiff);;All Files (*)")
         if file_paths:
-            self.handle_files_dropped(file_paths, self.source_item)
+            resolved_media = self._resolve_sequences_and_files(file_paths)
+            self.add_files_to_source(resolved_media)
+            if resolved_media:
+                item_to_load = resolved_media[0]
+                path_to_load = item_to_load[0] if isinstance(item_to_load, tuple) else item_to_load
+                self.load_single_file(path_to_load)
             
     def open_image_sequence(self, file_paths):
         folder_path = QFileDialog.getExistingDirectory(self, "Select Folder", "")
@@ -725,7 +826,9 @@ class MainWindow(QMainWindow):
         if path:
             node["path"] = path
             try:
-                node["relative_path"] = os.path.relpath(path, base_dir)
+                # Jangan coba buat relpath untuk pola sekuens
+                if '%' not in path:
+                    node["relative_path"] = os.path.relpath(path, base_dir)
             except ValueError:
                 pass
         children = [self._serialize_playlist_item(item.child(i), base_dir) for i in range(item.childCount())]
@@ -740,7 +843,9 @@ class MainWindow(QMainWindow):
             if resolved_path:
                 item.setData(0, Qt.UserRole, resolved_path)
                 item.setToolTip(0, resolved_path)
-                if not os.path.exists(resolved_path):
+                # Cek eksistensi untuk sekuens sedikit berbeda
+                exists = os.path.exists(resolved_path) if '%' not in resolved_path else os.path.exists(os.path.dirname(resolved_path))
+                if not exists:
                     item.setForeground(0, QColor("#ff8a80"))
             else:
                 item.setData(0, Qt.UserRole, None)
@@ -753,13 +858,17 @@ class MainWindow(QMainWindow):
                 self._load_playlist_branch(item, children, base_dir)
 
     def _resolve_playlist_path(self, node, base_dir):
+        path = node.get("path")
+        if path and '%' in path: # Jika ini pola sekuens, langsung gunakan
+            return os.path.abspath(path)
+
         candidates = []
         relative = node.get("relative_path")
         if relative:
             candidates.append(os.path.abspath(os.path.join(base_dir, relative)))
-        path = node.get("path")
         if path:
             candidates.append(os.path.abspath(path))
+        
         seen = set()
         for candidate in candidates:
             if not candidate or candidate in seen:
@@ -774,15 +883,23 @@ class MainWindow(QMainWindow):
         for i in range(parent_item.childCount()):
             child = parent_item.child(i)
             path = child.data(0, Qt.UserRole)
-            if path and not os.path.exists(path):
-                missing += 1
+            if path:
+                exists = os.path.exists(path) if '%' not in path else os.path.exists(os.path.dirname(path))
+                if not exists:
+                    missing += 1
             missing += self._count_missing_entries(child)
         return missing
         
-    def add_files_to_source(self, file_paths):
-        for path in file_paths:
-            if os.path.exists(path) and not self.find_item_by_path_recursive(path, self.source_item):
-                item = QTreeWidgetItem(self.source_item, [os.path.basename(path)])
+    def add_files_to_source(self, media_items):
+        for item_data in media_items:
+            if isinstance(item_data, tuple):
+                path, display_name = item_data
+            else:
+                path, display_name = item_data, os.path.basename(item_data)
+            
+            exists = os.path.exists(path) if '%' not in path else os.path.exists(os.path.dirname(path))
+            if exists and not self.find_item_by_path_recursive(path, self.source_item):
+                item = QTreeWidgetItem(self.source_item, [display_name])
                 item.setData(0, Qt.UserRole, path)
                 item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled | Qt.ItemIsEditable)
                 item.setToolTip(0, path)
@@ -1154,8 +1271,10 @@ class MainWindow(QMainWindow):
             item_path = item.data(0, Qt.UserRole)
             if item_path:
                 base_name = item.text(0)
-                if base_name.endswith(" (A/B)") or base_name.endswith(" (A)") or base_name.endswith(" (B)"):
-                    base_name = base_name[:-5].strip() if base_name.endswith(" (A/B)") else base_name[:-4].strip()
+                # Hapus indikator lama sebelum menambahkan yang baru
+                # Regex ini akan menghapus " (A)", " (B)", atau " (A/B)" dari akhir string
+                base_name = re.sub(r'\s\((A|B|A/B)\)$', '', base_name)
+                
                 indicator = ""
                 is_a = (item_path == path_a)
                 is_b = (self.compare_mode and item_path == path_b)

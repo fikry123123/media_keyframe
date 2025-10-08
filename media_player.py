@@ -119,15 +119,26 @@ class MediaPlayer(QWidget):
         
     def load_media(self, file_path):
         self.clear_media()
-        if not file_path or not os.path.exists(file_path):
-            self.video_label.setText("Load media for this view...")
+        
+        # Logika baru untuk memeriksa keberadaan file atau direktori sekuens
+        path_exists = False
+        if file_path:
+            if '%' in file_path:
+                dir_path = os.path.dirname(file_path)
+                path_exists = os.path.isdir(dir_path)
+            else:
+                path_exists = os.path.exists(file_path)
+
+        if not file_path or not path_exists:
+            self.video_label.setText("File or sequence directory not found...")
             self.frameIndexChanged.emit(-1, 0)
             self.fpsChanged.emit(0.0)
             return False
             
         self.current_media_path = None
         try:
-            cap = cv2.VideoCapture(file_path)
+            # Menggunakan cv2.CAP_FFMPEG bisa meningkatkan kompatibilitas
+            cap = cv2.VideoCapture(file_path, cv2.CAP_FFMPEG)
             if cap.isOpened():
                 ret, frame = cap.read()
                 if ret:
@@ -136,7 +147,8 @@ class MediaPlayer(QWidget):
                     self.current_frame = frame
                     self.displayed_frame_source = frame
                     self.total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
-                    self.fps = cap.get(cv2.CAP_PROP_FPS) or 30
+                    self.fps = cap.get(cv2.CAP_PROP_FPS) or 24 # Default FPS ke 24 untuk sekuens
+                    if self.fps == 0: self.fps = 24 # Pastikan FPS tidak 0
                     self.current_frame_index = int(cap.get(cv2.CAP_PROP_POS_FRAMES)) - 1
                     self.display_frame(frame)
                     self.frameIndexChanged.emit(self.current_frame_index, self.total_frames)
@@ -145,13 +157,14 @@ class MediaPlayer(QWidget):
                     self.current_media_path = file_path
                     self.has_finished = False 
                     self.playback_start_time = None
-                    self._prepare_audio(file_path)
+                    self._prepare_audio(file_path if '%' not in file_path else None) # Jangan cari audio untuk sekuens gambar
                     return True
                 else:
                     cap.release()
             else:
                 cap.release()
             
+            # Fallback untuk file gambar tunggal jika VideoCapture gagal
             frame = cv2.imread(file_path)
             if frame is not None:
                 self.is_video = False
@@ -173,6 +186,7 @@ class MediaPlayer(QWidget):
             self.video_label.setText(f"Error loading file: {file_path}")
             self.fpsChanged.emit(0.0)
             return False
+            
         self.video_label.setText("Unsupported file format")
         self.fpsChanged.emit(0.0)
         return False
@@ -217,7 +231,7 @@ class MediaPlayer(QWidget):
             if self.fps > 0:
                 interval = int(1000 / self.fps)
             else:
-                interval = 41
+                interval = 41 # Default ~24fps
             self.video_timer.start(interval)
             self.is_playing = True
             if self.fps > 0:
