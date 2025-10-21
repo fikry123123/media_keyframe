@@ -798,11 +798,23 @@ class MainWindow(QMainWindow):
                 self.controls.set_playback_mode_state("➡️|", "Playback Mode: Play Once")
         else:
             if self.loop_in_point is not None and self.loop_out_point is not None:
-                 # --- PERBAIKAN: Gunakan frame global untuk tooltip ---
+                 # Gunakan frame global untuk tooltip
                  in_point_display = self.loop_in_point + 1
                  out_point_display = self.loop_out_point + 1
                  self.controls.set_playback_mode_state("[🔁]", f"Playback Mode: Loop Range ({in_point_display} - {out_point_display})")
-                 # --- AKHIR PERBAIKAN ---
+
+        # --- PERBAIKAN: START ---
+        # Hanya set loop range di internal player jika TIDAK dalam mode segmen.
+        # Looping mode segmen ditangani oleh update_frame_counter.
+        # Looping mode compare ditangani oleh update_compare_frames.
+        if not self.segment_map:
+            self.media_player.set_loop_range(self.loop_in_point, self.loop_out_point)
+            if self.compare_mode:
+                 self.media_player_2.set_loop_range(self.loop_in_point, self.loop_out_point)
+        else:
+             # Jika kita dalam mode segmen, pastikan internal player TIDAK punya loop point
+             self.media_player.set_loop_range(None, None)
+        # --- PERBAIKAN: END ---
 
         # Terapkan jangkauan loop ke *kedua* player
         self.media_player.set_loop_range(self.loop_in_point, self.loop_out_point)
@@ -1187,8 +1199,12 @@ class MainWindow(QMainWindow):
                 self.seek_to_position(current_global_frame + 1)
         # --- AKHIR PERBAIKAN ---
             
-    def seek_to_position(self, position):
-        if self.is_mark_tour_active: self.toggle_mark_tour()
+    def seek_to_position(self, position, _internal_call=False):
+        # --- PERBAIKAN: Jangan hentikan tour jika dipanggil oleh tour itu sendiri ---
+        if self.is_mark_tour_active and not _internal_call:
+            self.toggle_mark_tour()
+        # --- AKHIR PERBAIKAN ---
+            
         if self.media_player.drawing_enabled: self.set_drawing_off() 
         
         # --- LOGIKA SEEKING SEGMEN BARU ---
@@ -1278,6 +1294,20 @@ class MainWindow(QMainWindow):
             # Update FPS timeline jika berubah antar segmen
             if self.timeline.fps != self.media_player.fps:
                  self.timeline.set_fps(self.media_player.fps)
+                 
+            # --- PERBAIKAN LOOP: START ---
+            # Cek logika loop range di sini menggunakan frame GLOBAL
+            if (self.media_player.is_playing and # Hanya jika sedang play
+                self.playback_mode == PlaybackMode.LOOP_MARKED_RANGE and
+                self.loop_out_point is not None and
+                global_frame >= self.loop_out_point):
+                
+                loop_start_frame = self.loop_in_point if self.loop_in_point is not None else 0
+                
+                # Gunakan self.seek_to_position() yang mengerti frame GLOBAL
+                self.seek_to_position(loop_start_frame)
+            # --- PERBAIKAN LOOP: END ---
+                 
         # --- AKHIR LOGIKA REMAPPING ---
         
     def update_frame_counter_B(self, cf, tf): pass
@@ -1423,8 +1453,8 @@ class MainWindow(QMainWindow):
         target_frame = self.marks[self.current_mark_tour_index]
         
         # --- PERBAIKAN MARK TOUR: START ---
-        # Gunakan self.seek_to_position (global)
-        self.seek_to_position(target_frame)
+        # Panggil seek_to_position (global) dengan flag _internal_call
+        self.seek_to_position(target_frame, _internal_call=True)
         # --- PERBAIKAN MARK TOUR: END ---
         
         self.mark_tour_timer.start(self.mark_tour_speed_ms)
