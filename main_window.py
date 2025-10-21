@@ -1,3 +1,9 @@
+#!/usr/bin/env python3
+"""
+Studio Media Player - Image Sequence Viewer
+A PyQt5-based media player optimized for viewing image sequences and video files.
+"""
+
 import os
 import sys
 import glob
@@ -1119,10 +1125,23 @@ class MainWindow(QMainWindow):
                 return
             if self.playback_mode == PlaybackMode.LOOP_MARKED_RANGE:
                 self.set_playback_mode(PlaybackMode.LOOP)
-            if self.media_player.is_playing:
-                self.toggle_play()
+            
+            # --- PERBAIKAN MARK TOUR: START ---
+            # Hentikan playback secara manual tanpa memanggil self.toggle_play()
+            # karena self.toggle_play() akan menghentikan tour.
+            if self.compare_mode:
+                if self.is_compare_playing:
+                    self.compare_timer.stop()
+                    self.is_compare_playing = False
+                    self.controls.set_play_state(False)
+            else:
+                if self.media_player.is_playing:
+                    self.media_player.toggle_play() # Aman, ini fungsi di media_player.py
+            # --- PERBAIKAN MARK TOUR: END ---
+
             if self.media_player.drawing_enabled: 
                 self.set_drawing_off()
+            
             self.is_mark_tour_active = True
             self.current_mark_tour_index = 0
             self.status_bar.showMessage("Mark tour started (looping). Press Ctrl+Shift+P to stop.", 5000)
@@ -1131,12 +1150,28 @@ class MainWindow(QMainWindow):
     def show_current_mark_frame(self):
         if not self.is_mark_tour_active or not self.marks:
             return
-        if self.media_player.is_playing:
-            self.toggle_play()
+        
+        # Hentikan playback (jika terlanjur play) tanpa memanggil self.toggle_play()
+        if self.compare_mode:
+            if self.is_compare_playing:
+                self.compare_timer.stop()
+                self.is_compare_playing = False
+                self.controls.set_play_state(False)
+        else:
+            if self.media_player.is_playing:
+                self.media_player.toggle_play()
+
         target_frame = self.marks[self.current_mark_tour_index]
-        # --- PERBAIKAN DI SINI ---
-        self.seek_to_position(target_frame)
-        # --- AKHIR PERBAIKAN ---
+        
+        # --- PERBAIKAN MARK TOUR: START ---
+        # Lakukan seek secara manual tanpa memanggil self.seek_to_position()
+        # karena self.seek_to_position() akan menghentikan tour.
+        self.media_player.seek_to_position(target_frame)
+        if self.compare_mode:
+            self.media_player_2.seek_to_position(target_frame)
+            self.update_composite_view()
+        # --- PERBAIKAN MARK TOUR: END ---
+        
         self.mark_tour_timer.start(self.mark_tour_speed_ms)
 
     def advance_mark_tour(self):
@@ -1321,6 +1356,11 @@ class MainWindow(QMainWindow):
                     if (h_a, w_a) != (h_ann, w_ann):
                         bgr_ann = cv2.resize(bgr_ann, (w_a, h_a), interpolation=cv2.INTER_NEAREST)
                         alpha_ann = cv2.resize(alpha_ann, (w_a, h_a), interpolation=cv2.INTER_NEAREST)
+
+                    # --- PERBAIKAN DI SINI ---
+                    # Ubah dari float64 (default numpy) ke float32 (yang didukung cvtColor)
+                    alpha_ann = alpha_ann.astype(np.float32) 
+                    # --- AKHIR PERBAIKAN ---
 
                     alpha_ann = cv2.cvtColor(alpha_ann, cv2.COLOR_GRAY2BGR) 
                     
