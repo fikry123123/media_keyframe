@@ -17,6 +17,13 @@ class TimelineWidget(QWidget):
         self.current_position = 0
         self.marks = [] # Marka putih
         self.annotation_marks = [] # Marka hijau (baru)
+        
+        # --- DATA SEGMEN BARU ---
+        # Menyimpan frame *global* di mana setiap video baru dimulai
+        self.segments = [] 
+        self.segment_total_frames = 0
+        # --- AKHIR DATA SEGMEN ---
+        
         self.fps = 0.0
         self.show_timecode = False
         self.current_mark_tour_speed = 1500
@@ -46,6 +53,17 @@ class TimelineWidget(QWidget):
         """Mengatur marka anotasi hijau (dari gambar)."""
         self.annotation_marks = marks
         self.update()
+
+    # --- FUNGSI BARU UNTUK SEGMEN ---
+    def set_segments(self, boundaries, total_frames):
+        """
+        Mengatur batas-batas segmen untuk digambar.
+        'boundaries' adalah daftar frame global di mana setiap segmen baru dimulai.
+        """
+        self.segments = boundaries
+        self.segment_total_frames = total_frames
+        self.update()
+    # --- AKHIR FUNGSI BARU ---
 
     def set_fps(self, fps):
         self.fps = fps
@@ -117,29 +135,40 @@ class TimelineWidget(QWidget):
         
         if self.duration > 0:
             
-            # --- LOGIKA MENGGAMBAR MARK BARU ---
+            # 'self.duration' sekarang bisa jadi durasi 1 file atau total durasi segmen
+            w = self.width()
+            # Durasi 1 frame tidak boleh dibagi (self.duration - 1 akan menjadi 0)
+            total_pos = (self.duration - 1) if self.duration > 1 else 1 
+
+            # --- LOGIKA GAMBAR SEGMEN BARU ---
+            if self.segments and self.segment_total_frames > 1:
+                # Gambar garis pemisah segmen (abu-abu putus-putus)
+                painter.setPen(QPen(QColor("#999999"), 1, Qt.DashLine))
+                for boundary_frame in self.segments:
+                    # Jangan gambar di frame 0
+                    if boundary_frame == 0:
+                        continue
+                    
+                    seg_x = (boundary_frame / total_pos) * w
+                    painter.drawLine(int(seg_x), 10, int(seg_x), self.height())
+            # --- AKHIR LOGIKA SEGMEN ---
+
+            # --- LOGIKA MENGGAMBAR MARK ---
             
-            # 2. Gambar marka anotasi (HIJAU) terlebih dahulu
+            # 2. Gambar marka anotasi (HIJAU)
             painter.setPen(QPen(QColor("#00ff00"), 2)) # Warna hijau
             for mark_frame in self.annotation_marks:
-                if self.duration > 1:
-                    mark_x = (mark_frame / (self.duration - 1)) * self.width()
-                else:
-                    mark_x = 0
+                mark_x = (mark_frame / total_pos) * w
                 painter.drawLine(int(mark_x), 10, int(mark_x), self.height())
 
-            # 3. Gambar marka biasa (PUTIH) di atasnya
+            # 3. Gambar marka biasa (PUTIH)
             painter.setPen(QPen(QColor("#ffffff"), 2))
             for mark_frame in self.marks:
-                if self.duration > 1:
-                    mark_x = (mark_frame / (self.duration - 1)) * self.width()
-                else:
-                    mark_x = 0
-                # Garis putih akan menimpa garis hijau jika di frame yang sama
+                mark_x = (mark_frame / total_pos) * w
                 painter.drawLine(int(mark_x), 10, int(mark_x), self.height())
 
-            # 4. Setelah itu, gambar playhead dan labelnya agar berada di lapisan atas
-            marker_x = (self.current_position / (self.duration - 1)) * self.width() if self.duration > 1 else 0
+            # 4. Gambar playhead dan labelnya
+            marker_x = (self.current_position / total_pos) * w
 
             painter.setPen(QPen(QColor("#ffffff"), 2))
             painter.drawLine(int(marker_x), 10, int(marker_x), self.height())
@@ -158,8 +187,8 @@ class TimelineWidget(QWidget):
                 bubble_y = 2
                 if bubble_x < 4:
                     bubble_x = 4
-                if bubble_x + bubble_width > self.width() - 4:
-                    bubble_x = self.width() - bubble_width - 4
+                if bubble_x + bubble_width > w - 4:
+                    bubble_x = w - bubble_width - 4
 
                 painter.setPen(Qt.NoPen)
                 painter.setBrush(QColor(20, 20, 20, 220))
@@ -180,8 +209,10 @@ class TimelineWidget(QWidget):
     def seek_to_mouse_position(self, pos):
         if self.duration > 0:
             x = pos.x()
+            
             if self.duration > 1:
-                new_position = int((x / self.width()) * (self.duration - 1))
+                total_pos = (self.duration - 1)
+                new_position = int((x / self.width()) * total_pos)
             else:
                 new_position = 0
             
@@ -194,18 +225,22 @@ class TimelineWidget(QWidget):
         frame_current = self.current_position + 1
         
         if self.show_timecode and self.fps > 0:
+            # Gunakan self.current_position (frame 0-based)
             total_seconds = self.current_position / self.fps
             minutes = int(total_seconds // 60)
             seconds_float = total_seconds - minutes * 60
             seconds = int(seconds_float)
             fractional = seconds_float - seconds
             frames = int(round(fractional * self.fps))
+            
+            # Penyesuaian frame
             if frames >= self.fps:
                 frames = 0
                 seconds += 1
                 if seconds >= 60:
                     seconds = 0
                     minutes += 1
+                    
             time_text = f"{minutes:02d}:{seconds:02d}.{frames:02d}"
             return time_text
             
