@@ -18,10 +18,10 @@ class DrawingToolbar(QWidget):
     def setup_ui(self):
         self.main_layout = QVBoxLayout(self)
         self.main_layout.setContentsMargins(5, 5, 5, 5)
-        self.main_layout.setSpacing(8)
+        self.main_layout.setSpacing(6) # <-- Sedikit lebih rapat
         self.main_layout.setAlignment(Qt.AlignTop) 
 
-        self.setFixedWidth(50) 
+        self.setFixedWidth(42) # <-- PERBAIKAN: Toolbar lebih ramping
         self.setStyleSheet("""
             QWidget {
                 background-color: #2b2b2b;
@@ -35,10 +35,10 @@ class DrawingToolbar(QWidget):
                 color: #ffffff;
                 border: 1px solid #666666;
                 border-radius: 6px;
-                font-size: 20px; 
+                font-size: 16px; 
                 font-weight: bold;
-                min-width: 38px;
-                min-height: 38px;
+                min-width: 30px;
+                min-height: 30px;
             }
             QPushButton:hover {
                 background-color: #555555;
@@ -53,7 +53,7 @@ class DrawingToolbar(QWidget):
                 border-color: #c45a1b;
                 color: white;
             }
-        """
+        """ # --- PERBAIKAN: font-size, min-width, min-height diperkecil ---
         
         self.tool_button_style = button_style + """
             QPushButton:checkable:checked {
@@ -72,7 +72,7 @@ class DrawingToolbar(QWidget):
         self.tools_container = QWidget()
         tools_layout = QVBoxLayout(self.tools_container)
         tools_layout.setContentsMargins(0, 0, 0, 0)
-        tools_layout.setSpacing(8)
+        tools_layout.setSpacing(6) # <-- Sedikit lebih rapat
 
         self.pen_button = QPushButton("🖊️") 
         self.pen_button.setStyleSheet(self.tool_button_style)
@@ -193,13 +193,13 @@ class DrawingToolbar(QWidget):
                 color: {text_color};
                 border: 1px solid #AAAAAA;
                 border-radius: 6px;
-                font-size: 20px;
+                font-size: 16px;
                 font-weight: bold;
-                min-width: 38px;
-                min-height: 38px;
+                min-width: 30px;
+                min-height: 30px;
             }}
             QPushButton:hover {{ background-color: {color.lighter(120).name()}; }}
             QPushButton:pressed {{ background-color: {color.darker(120).name()}; }}
-        """
+        """ # --- PERBAIKAN: font-size, min-width, min-height diperkecil ---
         self.color_button.setStyleSheet(style)
         self.color_button.setText("🎨")

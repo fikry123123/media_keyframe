@@ -18,7 +18,7 @@ from media_controls import MediaControls
 from timeline_widget import TimelineWidget
 from drawing_toolbar import DrawingToolbar 
 
-# ... (Class ProjectTreeWidget tidak berubah) ...
+# ... (Class ProjectTreeWidget tidak berubah, saya sembunyikan untuk keringkasan) ...
 class ProjectTreeWidget(QTreeWidget):
     filesDroppedOnTarget = pyqtSignal(list, object)
     treeChanged = pyqtSignal()
@@ -130,6 +130,7 @@ class ProjectTreeWidget(QTreeWidget):
         
         if source_changed:
             self.treeChanged.emit()
+
 
 class PlaybackMode(Enum):
     LOOP = auto()
@@ -304,7 +305,6 @@ class MainWindow(QMainWindow):
         self.drawing_toolbar.clearFrameDrawingClicked.connect(self.clear_current_frame_drawing)
         # --- AKHIR KONEKSI ---
 
-    # ... (setup_shortcuts dan fungsi-fungsi lain sampai ke slot drawing) ...
     def setup_shortcuts(self):
         QShortcut(QKeySequence(Qt.Key_Space), self).activated.connect(self.toggle_play)
         QShortcut(QKeySequence(Qt.Key_Left), self).activated.connect(self.previous_frame)
@@ -602,8 +602,8 @@ class MainWindow(QMainWindow):
 
             <h3>View</h3>
             <b>Ctrl + T</b>: Toggle Compare Mode<br>
-            <b>Ctrl + H</b>: Show / Hide Project Panel<br>
-        """
+            <b>Ctrl + H</b>: Show / Hide Project Panel & Drawing Toolbar<br> 
+        """ # <-- Teks shortcut diperbarui
         QMessageBox.information(
             self,
             "Keyboard Shortcuts",
@@ -1078,7 +1078,9 @@ class MainWindow(QMainWindow):
         if next_mark is None:
             next_mark = all_marks[0]
         if next_mark is not None:
-            self.media_player.seek_to_position(next_mark)
+            # --- PERBAIKAN DI SINI ---
+            self.seek_to_position(next_mark)
+            # --- AKHIR PERBAIKAN ---
 
     def jump_to_previous_mark(self):
         all_marks = sorted(list(set(self.marks) | self.annotation_marks))
@@ -1092,7 +1094,9 @@ class MainWindow(QMainWindow):
         if prev_mark is None:
             prev_mark = all_marks[-1]
         if prev_mark is not None:
-            self.media_player.seek_to_position(prev_mark)
+            # --- PERBAIKAN DI SINI ---
+            self.seek_to_position(prev_mark)
+            # --- AKHIR PERBAIKAN ---
             
     def jump_and_play_next_mark(self):
         self.jump_to_next_mark()
@@ -1130,7 +1134,9 @@ class MainWindow(QMainWindow):
         if self.media_player.is_playing:
             self.toggle_play()
         target_frame = self.marks[self.current_mark_tour_index]
-        self.media_player.seek_to_position(target_frame)
+        # --- PERBAIKAN DI SINI ---
+        self.seek_to_position(target_frame)
+        # --- AKHIR PERBAIKAN ---
         self.mark_tour_timer.start(self.mark_tour_speed_ms)
 
     def advance_mark_tour(self):
@@ -1431,10 +1437,14 @@ class MainWindow(QMainWindow):
         self.timeline.set_timecode_mode(show_timecode)
         
     def toggle_playlist_panel(self):
+        # --- PERBAIKAN UNTUK SHOW/HIDE ---
         if self.playlist_widget_container.isVisible():
             self.splitter_sizes = self.splitter.sizes()
             self.playlist_widget_container.setVisible(False)
+            self.drawing_toolbar.setVisible(False) # <--- TAMBAHAN
         else:
             self.playlist_widget_container.setVisible(True)
+            self.drawing_toolbar.setVisible(True) # <--- TAMBAHAN
             if self.splitter_sizes:
                 self.splitter.setSizes(self.splitter_sizes)
+        # --- AKHIR PERBAIKAN ---
