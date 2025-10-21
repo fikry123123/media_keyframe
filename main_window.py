@@ -750,7 +750,12 @@ class MainWindow(QMainWindow):
         else:
             if self.loop_in_point is not None and self.loop_out_point is not None:
                  self.controls.set_playback_mode_state("[🔁]", f"Playback Mode: Loop Range ({self.loop_in_point+1} - {self.loop_out_point+1})")
+        
+        # --- PERBAIKAN: START ---
+        # Terapkan jangkauan loop ke *kedua* player
         self.media_player.set_loop_range(self.loop_in_point, self.loop_out_point)
+        if self.compare_mode:
+             self.media_player_2.set_loop_range(self.loop_in_point, self.loop_out_point)
 
     def cycle_playback_mode(self):
         if self.playback_mode == PlaybackMode.LOOP:
@@ -1000,12 +1005,35 @@ class MainWindow(QMainWindow):
             self.media_player.toggle_play()
             
     def update_compare_frames(self):
+        # --- PERBAIKAN: START ---
+        # Cek loop logic *sebelum* melompat ke frame berikutnya
+        # Gunakan frame_index player A sebagai referensi (keduanya harus sinkron)
+        if (self.playback_mode == PlaybackMode.LOOP_MARKED_RANGE and
+                self.loop_out_point is not None and
+                self.media_player.current_frame_index >= self.loop_out_point):
+            
+            loop_start_frame = self.loop_in_point if self.loop_in_point is not None else 0
+            
+            # Panggil seek_to_position *internal* player
+            self.media_player.seek_to_position(loop_start_frame)
+            self.media_player_2.seek_to_position(loop_start_frame)
+            self.update_composite_view() # Tampilkan frame awal loop
+            return # Selesai untuk frame "tick" ini
+        # --- PERBAIKAN: END ---
+
+        # Jika tidak looping, maju ke frame berikutnya
         self.media_player.next_frame()
         self.media_player_2.next_frame()
         self.update_composite_view()
+        
+        # Cek kondisi selesai
         finished_a = not self.media_player.has_media() or self.media_player.current_frame_index >= self.media_player.total_frames - 1
         finished_b = not self.media_player_2.has_media() or self.media_player_2.current_frame_index >= self.media_player_2.total_frames - 1
+        
         if finished_a and finished_b:
+            # Panggil handle_playback_finished.
+            # Fungsi itu akan menangani mode LOOP (putar dari awal) atau PLAY_ONCE (stop).
+            # Mode LOOP_MARKED_RANGE seharusnya sudah ditangani oleh cek di atas.
             self.compare_timer.stop()
             self.handle_playback_finished()
             

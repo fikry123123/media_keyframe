@@ -18,10 +18,13 @@ class DrawingToolbar(QWidget):
     def setup_ui(self):
         self.main_layout = QVBoxLayout(self)
         self.main_layout.setContentsMargins(5, 5, 5, 5)
-        self.main_layout.setSpacing(6) # <-- Sedikit lebih rapat
+        self.main_layout.setSpacing(6) 
         self.main_layout.setAlignment(Qt.AlignTop) 
 
-        self.setFixedWidth(42) # <-- PERBAIKAN: Toolbar lebih ramping
+        # --- PERBAIKAN: Toolbar DIBUAT LEBIH RAMPING ---
+        self.setFixedWidth(40) # <-- NAIK DARI 46 ke 40
+        # --- AKHIR PERBAIKAN ---
+        
         self.setStyleSheet("""
             QWidget {
                 background-color: #2b2b2b;
@@ -29,16 +32,17 @@ class DrawingToolbar(QWidget):
             }
         """)
 
+        # --- PERBAIKAN: Tombol diperkecil ---
         button_style = """
             QPushButton {
                 background-color: #444444;
                 color: #ffffff;
                 border: 1px solid #666666;
                 border-radius: 6px;
-                font-size: 16px; 
+                font-size: 14px; 
                 font-weight: bold;
-                min-width: 30px;
-                min-height: 30px;
+                min-width: 26px;
+                min-height: 26px;
             }
             QPushButton:hover {
                 background-color: #555555;
@@ -53,7 +57,8 @@ class DrawingToolbar(QWidget):
                 border-color: #c45a1b;
                 color: white;
             }
-        """ # --- PERBAIKAN: font-size, min-width, min-height diperkecil ---
+        """ 
+        # --- AKHIR PERBAIKAN ---
         
         self.tool_button_style = button_style + """
             QPushButton:checkable:checked {
@@ -72,7 +77,7 @@ class DrawingToolbar(QWidget):
         self.tools_container = QWidget()
         tools_layout = QVBoxLayout(self.tools_container)
         tools_layout.setContentsMargins(0, 0, 0, 0)
-        tools_layout.setSpacing(6) # <-- Sedikit lebih rapat
+        tools_layout.setSpacing(6) 
 
         self.pen_button = QPushButton("🖊️") 
         self.pen_button.setStyleSheet(self.tool_button_style)
@@ -118,16 +123,12 @@ class DrawingToolbar(QWidget):
         self.tools_container.setVisible(checked)
         
         if checked:
-            # --- PERBAIKAN: Atur state awal secara eksplisit ---
-            # Pastikan hanya satu tombol alat yang aktif
             if not self.pen_button.isChecked() and not self.erase_button.isChecked():
-                 # Jika tidak ada yang aktif, default ke Pena
                  self.pen_button.setChecked(True) 
                  self.erase_button.setChecked(False)
                  self.drawModeToggled.emit(True)
                  self.eraseModeToggled.emit(False)
             elif self.pen_button.isChecked():
-                 # Jika Pena sudah aktif, kirim sinyal lagi
                  self.erase_button.setChecked(False)
                  self.drawModeToggled.emit(True)
                  self.eraseModeToggled.emit(False)
@@ -135,33 +136,25 @@ class DrawingToolbar(QWidget):
                  self.pen_button.setChecked(False)
                  self.drawModeToggled.emit(False)
                  self.eraseModeToggled.emit(True)
-            # --- AKHIR PERBAIKAN ---
 
         else:
-            # Saat toolbar ditutup, matikan semua mode
-            # (Tidak perlu uncheck tombol alat, karena akan disembunyikan)
             self.drawModeToggled.emit(False) 
             self.eraseModeToggled.emit(False)
 
     def _on_pen_selected(self):
         """Dipanggil saat tombol alat Pena (🖊️) ditekan."""
-        # --- PERBAIKAN: Sederhanakan logika ---
-        # Cukup pastikan tombol lain mati dan kirim sinyal
         if self.erase_button.isChecked():
             self.erase_button.setChecked(False)
         
-        # Set tombol ini menjadi checked (jika belum)
         if not self.pen_button.isChecked():
-            self.pen_button.setChecked(True) # Ini tidak akan memicu sinyal clicked lagi
+            self.pen_button.setChecked(True) 
 
         self.drawModeToggled.emit(True)
-        self.eraseModeToggled.emit(False) # Pastikan mode lain mati
-        # --- AKHIR PERBAIKAN ---
+        self.eraseModeToggled.emit(False) 
 
 
     def _on_erase_selected(self):
         """Dipanggil saat tombol alat Hapus (🧹) ditekan."""
-        # --- PERBAIKAN: Sederhanakan logika ---
         if self.pen_button.isChecked():
             self.pen_button.setChecked(False)
 
@@ -169,8 +162,7 @@ class DrawingToolbar(QWidget):
              self.erase_button.setChecked(True)
 
         self.eraseModeToggled.emit(True)
-        self.drawModeToggled.emit(False) # Pastikan mode lain mati
-        # --- AKHIR PERBAIKAN ---
+        self.drawModeToggled.emit(False) 
 
 
     def force_close(self):
@@ -187,19 +179,22 @@ class DrawingToolbar(QWidget):
 
         text_color = 'black' if color.lightness() > 127 else 'white'
         
+        # --- PERBAIKAN: Style tombol warna juga diperkecil ---
         style = f"""
             QPushButton {{
                 background-color: {color.name()};
                 color: {text_color};
                 border: 1px solid #AAAAAA;
                 border-radius: 6px;
-                font-size: 16px;
+                font-size: 14px;
                 font-weight: bold;
-                min-width: 30px;
-                min-height: 30px;
+                min-width: 26px;
+                min-height: 26px;
             }}
             QPushButton:hover {{ background-color: {color.lighter(120).name()}; }}
             QPushButton:pressed {{ background-color: {color.darker(120).name()}; }}
-        """ # --- PERBAIKAN: font-size, min-width, min-height diperkecil ---
+        """
+        # --- AKHIR PERBAIKAN ---
+        
         self.color_button.setStyleSheet(style)
         self.color_button.setText("🎨")
