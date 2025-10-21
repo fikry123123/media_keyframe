@@ -6,6 +6,8 @@ class MediaControls(QWidget):
     compare_toggled = pyqtSignal()
     volume_changed = pyqtSignal(int)
 
+    # --- Sinyal drawing dihapus dari sini ---
+
     def __init__(self):
         super().__init__()
         self.setup_ui()
@@ -40,8 +42,15 @@ class MediaControls(QWidget):
                 color: #666666;
                 border-color: #444444;
             }
+            /* Style ini tidak lagi digunakan di sini, tapi tidak apa-apa */
+            QPushButton:checkable:checked {
+                background-color: #0078d4;
+                border-color: #005a9e;
+                color: white;
+            }
         """
         
+        # --- Tombol Kontrol Playback (Kiri) ---
         layout.addStretch()
         
         self.first_frame_button = QPushButton("⏮")
@@ -71,6 +80,7 @@ class MediaControls(QWidget):
         
         layout.addSpacing(20)
 
+        # --- Tombol Mode (Tengah) ---
         self.playback_mode_button = QPushButton("→")
         self.playback_mode_button.setStyleSheet(button_style)
         self.playback_mode_button.setToolTip("Playback Mode: Normal (Stop at end)")
@@ -82,9 +92,12 @@ class MediaControls(QWidget):
         self.compare_button.clicked.connect(self.compare_toggled.emit)
         layout.addWidget(self.compare_button)
 
+        # --- TOMBOL DRAWING DIHAPUS DARI SINI ---
+
         spacer = QSpacerItem(20, 10, QSizePolicy.Expanding, QSizePolicy.Minimum)
         layout.addItem(spacer)
 
+        # --- Kontrol Volume (Kanan) ---
         volume_label = QLabel("Volume")
         volume_label.setStyleSheet("QLabel { color: #dddddd; font-size: 12px; }")
         layout.addWidget(volume_label)
@@ -133,3 +146,5 @@ class MediaControls(QWidget):
     def volume(self):
         """Return current volume percentage."""
         return self.volume_slider.value()
+
+    # --- Fungsi set_draw_color_indicator DIHAPUS ---

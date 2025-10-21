@@ -15,7 +15,8 @@ class TimelineWidget(QWidget):
         
         self.duration = 0
         self.current_position = 0
-        self.marks = []
+        self.marks = [] # Marka putih
+        self.annotation_marks = [] # Marka hijau (baru)
         self.fps = 0.0
         self.show_timecode = False
         self.current_mark_tour_speed = 1500
@@ -37,7 +38,13 @@ class TimelineWidget(QWidget):
             self.update()
 
     def set_marks(self, marks):
+        """Mengatur marka putih (dari tombol 'F')."""
         self.marks = marks
+        self.update()
+
+    def set_annotation_marks(self, marks):
+        """Mengatur marka anotasi hijau (dari gambar)."""
+        self.annotation_marks = marks
         self.update()
 
     def set_fps(self, fps):
@@ -109,17 +116,29 @@ class TimelineWidget(QWidget):
         painter.drawRect(self.rect())
         
         if self.duration > 0:
-            # --- PERUBAHAN URUTAN GAMBAR ---
-            # 2. Gambar semua garis penanda (marks) terlebih dahulu
-            painter.setPen(QPen(QColor("#ffffff"), 2))
-            for mark_frame in self.marks:
+            
+            # --- LOGIKA MENGGAMBAR MARK BARU ---
+            
+            # 2. Gambar marka anotasi (HIJAU) terlebih dahulu
+            painter.setPen(QPen(QColor("#00ff00"), 2)) # Warna hijau
+            for mark_frame in self.annotation_marks:
                 if self.duration > 1:
                     mark_x = (mark_frame / (self.duration - 1)) * self.width()
                 else:
                     mark_x = 0
                 painter.drawLine(int(mark_x), 10, int(mark_x), self.height())
 
-            # 3. Setelah itu, gambar playhead dan labelnya agar berada di lapisan atas
+            # 3. Gambar marka biasa (PUTIH) di atasnya
+            painter.setPen(QPen(QColor("#ffffff"), 2))
+            for mark_frame in self.marks:
+                if self.duration > 1:
+                    mark_x = (mark_frame / (self.duration - 1)) * self.width()
+                else:
+                    mark_x = 0
+                # Garis putih akan menimpa garis hijau jika di frame yang sama
+                painter.drawLine(int(mark_x), 10, int(mark_x), self.height())
+
+            # 4. Setelah itu, gambar playhead dan labelnya agar berada di lapisan atas
             marker_x = (self.current_position / (self.duration - 1)) * self.width() if self.duration > 1 else 0
 
             painter.setPen(QPen(QColor("#ffffff"), 2))
