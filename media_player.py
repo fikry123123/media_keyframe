@@ -3,76 +3,181 @@ import time
 import cv2
 import numpy as np
 from PyQt5.QtWidgets import QLabel, QVBoxLayout, QWidget, QSizePolicy
-from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QMimeData, QUrl, QPoint
-from PyQt5.QtGui import QPixmap, QImage, QDragEnterEvent, QDropEvent, QPainter, QPen, QColor
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QMimeData, QUrl, QPoint, QPointF
+from PyQt5.QtGui import QPixmap, QImage, QDragEnterEvent, QDropEvent, QPainter, QPen, QColor, QWheelEvent, QMouseEvent
 from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
 
 class DrawingLabel(QLabel):
     """
-    Label kustom yang menangani input mouse untuk menggambar pada frame video.
+    Label kustom yang menangani input mouse untuk menggambar PADA frame video,
+    DAN menangani input zoom/pan PADA viewport.
     """
     def __init__(self, parent_media_player):
         super().__init__()
         self.media_player = parent_media_player
         self.drawing = False
         self.last_point_frame = None
+        
+        # --- PERBAIKAN: Lacak player mana yang sedang digambar ---
+        self.last_target_player = None
+        # --- AKHIR PERBAIKAN ---
+        
+        # --- State untuk Panning ---
+        self.panning = False
+        self.last_pan_pos = QPoint()
+        # --- Akhir State Panning ---
+        
         self.setMouseTracking(True) # Diperlukan untuk kursor
 
-    def _map_widget_to_frame_coords(self, widget_pos):
+    def _map_widget_to_frame_coords(self, widget_pos: QPoint):
         """
         Memetakan koordinat QPoint dari widget label ke koordinat (x, y) 
         pada frame video asli.
+        
+        PERBAIKAN: Sekarang mengembalikan tuple (target_player, frame_pos_qpoint)
+        target_player adalah instance MediaPlayer (A atau B)
+        frame_pos_qpoint adalah QPoint di koordinat frame asli target
         """
         mp = self.media_player
-        # Pastikan kita memiliki semua info yang diperlukan untuk pemetaan
-        if not mp.pixmap_size or mp.pixmap_size.width() == 0 or mp.pixmap_size.height() == 0 or mp.frame_dims is None:
-            return None
+        partner = mp.compare_partner
+        
+        # Tentukan dimensi frame target
+        if mp.frame_dims_A is None:
+            return None, None # Tidak ada media di A
+        
+        h_a, w_a, ch_a = mp.frame_dims_A
 
-        # 1. Ubah koordinat widget ke koordinat pixmap (yang diskalakan)
-        pixmap_pos = widget_pos - mp.pixmap_offset
-        
-        # 2. Periksa apakah klik berada di dalam area pixmap
-        if not (0 <= pixmap_pos.x() < mp.pixmap_size.width() and 0 <= pixmap_pos.y() < mp.pixmap_size.height()):
-            return None
-        
-        # 3. Ubah koordinat pixmap ke koordinat frame asli
-        h, w, ch = mp.frame_dims
-        fx = pixmap_pos.x() * (w / mp.pixmap_size.width())
-        fy = pixmap_pos.y() * (h / mp.pixmap_size.height())
-        
-        return QPoint(int(fx), int(fy))
+        # Pastikan kita memiliki info pixmap (tampilan)
+        if not mp.pixmap_size or mp.pixmap_size.width() == 0 or mp.pixmap_size.height() == 0:
+            return None, None
 
-    def mousePressEvent(self, event):
-        # Mulai menggambar hanya jika mode diaktifkan dan ada media
+        # 1. Ubah koordinat widget (label) ke koordinat relatif pixmap (letterboxed)
+        pixmap_relative_pos = widget_pos - mp.pixmap_offset
+        
+        # 2. Ubah ke koordinat panned
+        panned_pos = pixmap_relative_pos - mp.zoom_pan
+        
+        # 3. Ubah ke koordinat scaled (batalkan zoom)
+        scaled_pixmap_x = panned_pos.x() / mp.zoom_scale
+        scaled_pixmap_y = panned_pos.y() / mp.zoom_scale
+
+        # 4. Periksa apakah klik berada di dalam area pixmap yang di-render
+        if not (0 <= scaled_pixmap_x < mp.pixmap_size.width() and 
+                0 <= scaled_pixmap_y < mp.pixmap_size.height()):
+            return None, None
+            
+        # 5. Ubah koordinat pixmap yang diskalakan ke koordinat frame asli
+        if mp.compare_split_ratio is not None and partner:
+            # --- Mode Compare ---
+            # Hitung lebar Player A di dalam pixmap komposit
+            split_width_a_scaled = mp.pixmap_size.width() * mp.compare_split_ratio
+            split_width_b_scaled = mp.pixmap_size.width() - split_width_a_scaled
+
+            if scaled_pixmap_x >= split_width_a_scaled:
+                # --- Klik di VIEW B ---
+                if partner.frame_dims_A is None: # Cek jika partner punya frame
+                     return None, None
+                h_b, w_b, _ = partner.frame_dims_A
+                
+                # Map dari koordinat B-scaled ke B-original
+                # (scaled_pixmap_x - split_width_a_scaled) = X relatif di area B
+                fx = (scaled_pixmap_x - split_width_a_scaled) * (w_b / split_width_b_scaled)
+                fy = scaled_pixmap_y * (h_b / mp.pixmap_size.height()) # Tinggi A dan B sama
+                
+                return partner, QPoint(int(fx), int(fy))
+                
+            else:
+                # --- Klik di VIEW A ---
+                # Map dari koordinat A-scaled ke A-original
+                fx = scaled_pixmap_x * (w_a / split_width_a_scaled)
+                fy = scaled_pixmap_y * (h_a / mp.pixmap_size.height())
+                
+                return mp, QPoint(int(fx), int(fy))
+        
+        else:
+            # --- Mode Single View ---
+            # Map dari koordinat pixmap-scaled ke frame-original
+            fx = scaled_pixmap_x * (w_a / mp.pixmap_size.width())
+            fy = scaled_pixmap_y * (h_a / mp.pixmap_size.height())
+            
+            return mp, QPoint(int(fx), int(fy))
+
+
+    def wheelEvent(self, event: QWheelEvent):
+        """Menangani Ctrl+Scroll untuk Zoom."""
+        if event.modifiers() & Qt.ControlModifier:
+            delta = event.angleDelta().y()
+            widget_pos = event.pos() 
+            self.media_player.zoom(delta, widget_pos)
+            event.accept()
+        else:
+            super().wheelEvent(event)
+
+    def mousePressEvent(self, event: QMouseEvent):
+        if event.button() == Qt.MiddleButton and self.media_player.zoom_scale > 1.0:
+            self.panning = True
+            self.last_pan_pos = event.pos()
+            self.setCursor(Qt.ClosedHandCursor)
+            event.accept()
+            return
+
+        # --- PERBAIKAN: Logika drawing (Left Mouse) ---
         if event.button() == Qt.LeftButton and self.media_player.drawing_enabled and self.media_player.has_media():
-            frame_pos = self._map_widget_to_frame_coords(event.pos())
-            if frame_pos:
+            
+            target_player, frame_pos = self._map_widget_to_frame_coords(event.pos())
+            
+            if target_player and frame_pos:
                 self.drawing = True
                 self.last_point_frame = frame_pos
-                self.media_player.get_current_annotation_image() # Pastikan layer anotasi ada
-                # Gambar satu titik untuk klik tunggal
-                self.media_player.draw_on_annotation(frame_pos, frame_pos) 
+                self.last_target_player = target_player # Simpan player yang dituju
+                
+                target_player.get_current_annotation_image() # Pastikan layer anotasi ada
+                target_player.draw_on_annotation(frame_pos, frame_pos) # Gambar di player target
         else:
             super().mousePressEvent(event) # teruskan klik lain
+        # --- AKHIR PERBAIKAN ---
 
-    def mouseMoveEvent(self, event):
+    def mouseMoveEvent(self, event: QMouseEvent):
+        if self.panning:
+            delta = event.pos() - self.last_pan_pos
+            self.media_player.pan(delta)
+            self.last_pan_pos = event.pos()
+            event.accept()
+            return
+
+        # --- PERBAIKAN: Logika drawing (Left Mouse) ---
         if self.drawing and self.media_player.drawing_enabled:
-            frame_pos = self._map_widget_to_frame_coords(event.pos())
-            if frame_pos:
+            target_player, frame_pos = self._map_widget_to_frame_coords(event.pos())
+            
+            # Hanya menggambar jika masih di player yang sama
+            if target_player and frame_pos and target_player == self.last_target_player:
                 # Gambar garis dari titik terakhir ke titik sekarang
-                self.media_player.draw_on_annotation(self.last_point_frame, frame_pos)
+                target_player.draw_on_annotation(self.last_point_frame, frame_pos)
                 self.last_point_frame = frame_pos
         else:
             super().mouseMoveEvent(event)
+        # --- AKHIR PERBAIKAN ---
 
-    def mouseReleaseEvent(self, event):
+    def mouseReleaseEvent(self, event: QMouseEvent):
+        if event.button() == Qt.MiddleButton and self.panning:
+            self.panning = False
+            self.media_player.update_cursor() 
+            event.accept()
+            return
+
+        # --- PERBAIKAN: Logika drawing (Left Mouse) ---
         if event.button() == Qt.LeftButton and self.drawing:
             self.drawing = False
+            
+            # Finalisasi di player yang terakhir digambar
+            if self.last_target_player:
+                self.last_target_player.finalize_drawing() 
+                
+            self.last_target_player = None
             self.last_point_frame = None
-            # Beri tahu media player bahwa gambar telah ditambahkan/diubah
-            self.media_player.finalize_drawing() 
         else:
             super().mouseReleaseEvent(event)
+        # --- AKHIR PERBAIKAN ---
 
 class MediaPlayer(QWidget):
     frameIndexChanged = pyqtSignal(int, int)
@@ -81,7 +186,8 @@ class MediaPlayer(QWidget):
     fpsChanged = pyqtSignal(float)
     playbackFinished = pyqtSignal()
     fileDropped = pyqtSignal(str, str)
-    annotationAdded = pyqtSignal(int) # Sinyal baru saat gambar ditambahkan
+    annotationAdded = pyqtSignal(int) 
+    viewNeedsRedraw = pyqtSignal()
     
     def __init__(self, enable_audio=True):
         super().__init__()
@@ -110,22 +216,26 @@ class MediaPlayer(QWidget):
         self.playback_start_time = None
         self.compare_split_ratio = None
         
-        # --- FITUR DRAWING BARU ---
-        self.annotations = {} # Kamus untuk menyimpan: {frame_index: QImage}
+        # --- PERBAIKAN: Tambah referensi ke partner ---
+        self.compare_partner = None
+        # --- AKHIR PERBAIKAN ---
+        
+        self.annotations = {} 
         self.drawing_enabled = False
-        self.draw_pen_color = QColor(255, 0, 0, 255) # Default: Merah
+        self.draw_pen_color = QColor(255, 0, 0, 255) 
         self.draw_pen_width = 5
         
-        # Info untuk pemetaan koordinat
+        self.zoom_scale = 1.0
+        self.zoom_pan = QPoint(0, 0)
+        
         self.pixmap_offset = QPoint(0, 0)
         self.pixmap_size = None
         self.frame_dims = None # (h, w, ch)
-        # --- AKHIR FITUR DRAWING ---
+        self.frame_dims_A = None # Dimensi asli Player A (untuk compare mode drawing)
 
     def setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        # Gunakan DrawingLabel kustom, bukan QLabel standar
         self.video_label = DrawingLabel(self) 
         self.video_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
         self.video_label.setAlignment(Qt.AlignCenter)
@@ -143,7 +253,12 @@ class MediaPlayer(QWidget):
         self.video_label.setText("Load media file to start...")
         layout.addWidget(self.video_label)
 
-    # ... (fungsi _prepare_audio, _current_time_ms, _sync_audio... tidak berubah) ...
+    # --- PERBAIKAN: Fungsi baru untuk set partner ---
+    def set_compare_partner(self, partner):
+        """Menyimpan referensi ke media player B."""
+        self.compare_partner = partner
+    # --- AKHIR PERBAIKAN ---
+
     def _prepare_audio(self, file_path):
         if not self.audio_player:
             return
@@ -225,12 +340,16 @@ class MediaPlayer(QWidget):
                     self.video_capture = cap
                     self.is_video = True
                     self.current_frame = frame
-                    # self.displayed_frame_source diatur dalam display_frame
                     self.total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
                     self.fps = cap.get(cv2.CAP_PROP_FPS) or 24 
                     if self.fps == 0: self.fps = 24
                     self.current_frame_index = int(cap.get(cv2.CAP_PROP_POS_FRAMES)) - 1
-                    self.display_frame(frame) # Ini akan mengatur self.displayed_frame_source
+                    
+                    # Simpan dimensi Player A (untuk compare drawing)
+                    h, w, ch = frame.shape
+                    self.frame_dims_A = (h, w, ch)
+                    
+                    self.display_frame(frame) 
                     self.frameIndexChanged.emit(self.current_frame_index, self.total_frames)
                     self.fpsChanged.emit(self.fps)
                     self.frameReady.emit()
@@ -248,10 +367,14 @@ class MediaPlayer(QWidget):
             if frame is not None:
                 self.is_video = False
                 self.current_frame = frame
-                # self.displayed_frame_source diatur dalam display_frame
                 self.total_frames = 1
                 self.current_frame_index = 0
-                self.display_frame(frame) # Ini akan mengatur self.displayed_frame_source
+                
+                # Simpan dimensi Player A (untuk compare drawing)
+                h, w, ch = frame.shape
+                self.frame_dims_A = (h, w, ch)
+                
+                self.display_frame(frame) 
                 self.frameIndexChanged.emit(0, 1)
                 self.fpsChanged.emit(0.0)
                 self.frameReady.emit()
@@ -272,18 +395,16 @@ class MediaPlayer(QWidget):
         
     def display_frame(self, frame):
         if frame is None:
-            # Jika frame None, setidaknya perbarui info pemetaan agar tidak error
             self.pixmap_size = None
             self.pixmap_offset = QPoint(0, 0)
             self.frame_dims = None
+            self.video_label.setPixmap(QPixmap())
             return
         
-        # Buat salinan frame agar kita tidak menggambar di atas frame cache cv2
         self.displayed_frame_source = frame.copy() 
         
         rgb_frame = cv2.cvtColor(self.displayed_frame_source, cv2.COLOR_BGR2RGB)
         
-        # Simpan dimensi frame asli
         h, w, ch = rgb_frame.shape
         self.frame_dims = (h, w, ch)
         
@@ -296,36 +417,43 @@ class MediaPlayer(QWidget):
         qt_image = QImage(rgb_frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
         pixmap = QPixmap.fromImage(qt_image)
         
-        # Skalakan pixmap video
         scaled_pixmap = pixmap.scaled(widget_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         
-        # --- LOGIKA ANOTASI BARU ---
-        # Periksa apakah ada anotasi untuk frame ini
+        # (Anotasi di mode compare sudah dibake oleh main_window)
         annotation_image = self.annotations.get(self.current_frame_index)
-        if annotation_image:
-            # Ubah QImage anotasi (seukuran frame) menjadi QPixmap
+        if annotation_image and self.compare_split_ratio is None: # Hanya gambar di mode single
             annotation_pixmap = QPixmap.fromImage(annotation_image)
-            
-            # Skalakan anotasi agar sesuai dengan video yang diskalakan
             scaled_annotation = annotation_pixmap.scaled(scaled_pixmap.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            
-            # Gambar anotasi di atas pixmap video
             painter = QPainter(scaled_pixmap)
             painter.drawPixmap(0, 0, scaled_annotation)
             painter.end()
-        # --- AKHIR LOGIKA ANOTASI ---
 
-        # Simpan info penskalaan & offset untuk pemetaan mouse
         self.pixmap_size = scaled_pixmap.size()
         lbl_size = self.video_label.size()
         self.pixmap_offset = QPoint((lbl_size.width() - self.pixmap_size.width()) // 2, (lbl_size.height() - self.pixmap_size.height()) // 2)
 
-        # Terakhir, tampilkan pixmap gabungan
-        self.video_label.setPixmap(scaled_pixmap)
+        final_canvas = QPixmap(widget_size)
+        final_canvas.fill(QColor("#1a1a1a")) 
+        
+        painter = QPainter(final_canvas)
+        
+        if self.zoom_scale == 1.0:
+            painter.drawPixmap(self.pixmap_offset, scaled_pixmap)
+        else:
+            zoomed_pixmap = scaled_pixmap.scaled(
+                self.pixmap_size * self.zoom_scale, 
+                Qt.IgnoreAspectRatio, 
+                Qt.SmoothTransformation
+            )
+            draw_pos = self.pixmap_offset + self.zoom_pan
+            painter.drawPixmap(draw_pos, zoomed_pixmap)
+            
+        painter.end()
+        
+        self.video_label.setPixmap(final_canvas)
         
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        # Tampilkan ulang frame saat ini dengan ukuran baru
         if self.displayed_frame_source is not None:
             self.display_frame(self.displayed_frame_source)
             
@@ -333,8 +461,12 @@ class MediaPlayer(QWidget):
         if not self.is_video or not self.video_capture: return
 
         if self.has_finished:
-            self.seek_to_position(0)
-            self.has_finished = False
+            is_in_loop_range = (self.loop_out_point is not None and 
+                                self.current_frame_index >= self.loop_out_point)
+            
+            if not is_in_loop_range:
+                self.seek_to_position(0)
+                self.has_finished = False
 
         if self.is_playing:
             self.video_timer.stop()
@@ -365,12 +497,10 @@ class MediaPlayer(QWidget):
         if self.audio_player:
             self.audio_player.stop()
         if self.is_video and self.video_capture:
-            # Pergi ke frame 0
             self.video_capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
             ret, frame = self.video_capture.read()
             if ret:
                 self.current_frame = frame
-                # self.displayed_frame_source diatur dalam display_frame
                 self.current_frame_index = int(self.video_capture.get(cv2.CAP_PROP_POS_FRAMES)) - 1
                 self.display_frame(frame)
                 self.frameIndexChanged.emit(self.current_frame_index, self.total_frames)
@@ -386,7 +516,6 @@ class MediaPlayer(QWidget):
             ret, frame = self.video_capture.read()
             if ret:
                 self.current_frame = frame
-                # self.displayed_frame_source diatur dalam display_frame
                 self.current_frame_index = int(self.video_capture.get(cv2.CAP_PROP_POS_FRAMES)) - 1
                 self.display_frame(frame)
                 self.frameIndexChanged.emit(self.current_frame_index, self.total_frames)
@@ -400,7 +529,6 @@ class MediaPlayer(QWidget):
             ret, frame = self.video_capture.read()
             if ret:
                 self.current_frame = frame
-                # self.displayed_frame_source diatur dalam display_frame
                 self.current_frame_index = int(self.video_capture.get(cv2.CAP_PROP_POS_FRAMES)) - 1
                 self.display_frame(frame)
                 self.frameIndexChanged.emit(self.current_frame_index, self.total_frames)
@@ -416,11 +544,11 @@ class MediaPlayer(QWidget):
             ret, frame = self.video_capture.read()
             if ret:
                 self.current_frame = frame
-                # self.displayed_frame_source diatur dalam display_frame
                 self.current_frame_index = int(self.video_capture.get(cv2.CAP_PROP_POS_FRAMES)) - 1
                 self.display_frame(frame)
                 self.frameIndexChanged.emit(self.current_frame_index, self.total_frames)
                 self.has_finished = False 
+                self.has_finished = (frame_index == self.total_frames - 1) # Set finished jika seek ke frame terakhir
                 self._sync_audio_to_current_frame(force=True)
                 self._reset_playback_clock()
                 
@@ -465,12 +593,10 @@ class MediaPlayer(QWidget):
         ret, frame = self.video_capture.read()
         if ret:
             self.current_frame = frame
-            # self.displayed_frame_source diatur dalam display_frame
             self.current_frame_index = int(self.video_capture.get(cv2.CAP_PROP_POS_FRAMES)) - 1
             self.display_frame(frame)
             self.frameIndexChanged.emit(self.current_frame_index, self.total_frames)
             self._sync_audio_to_current_frame()
-            self._reset_playback_clock()
         else:
             self.video_timer.stop()
             self.is_playing = False
@@ -512,14 +638,20 @@ class MediaPlayer(QWidget):
         self._prepare_audio(None)
         self.compare_split_ratio = None
         
-        # --- RESET FITUR DRAWING ---
+        # --- PERBAIKAN: Reset partner ---
+        self.compare_partner = None
+        # --- AKHIR PERBAIKAN ---
+        
         self.annotations.clear()
         self.pixmap_offset = QPoint(0, 0)
         self.pixmap_size = None
         self.frame_dims = None
+        self.frame_dims_A = None 
         self.drawing_enabled = False
         self.video_label.setCursor(Qt.ArrowCursor)
-        # --- AKHIR RESET ---
+        
+        self.zoom_scale = 1.0
+        self.zoom_pan = QPoint(0, 0)
 
     def dragEnterEvent(self, event: QDragEnterEvent):
         if event.mimeData().hasUrls() or event.mimeData().hasFormat("application/x-playlist-paths"):
@@ -558,22 +690,21 @@ class MediaPlayer(QWidget):
 
             self.fileDropped.emit(file_path, target_view)
             event.acceptProposedAction()
-
-    # --- FUNGSI HELPER DRAWING BARU ---
     
     def get_current_annotation_image(self):
         """
         Mengambil layer anotasi QImage untuk frame saat ini.
         Membuatnya jika belum ada.
+        INI SELALU MENGGUNAKAN frame_dims_A KARENA INI ADALAH FUNGSI DARI
+        INSTANCE MediaPlayer (A atau B)
         """
-        if self.current_frame_index < 0 or not self.frame_dims:
+        if self.current_frame_index < 0 or not self.frame_dims_A:
             return None
         
         image = self.annotations.get(self.current_frame_index)
         
         if image is None:
-            # Buat QImage transparan seukuran frame video
-            h, w, ch = self.frame_dims
+            h, w, ch = self.frame_dims_A
             image = QImage(w, h, QImage.Format_ARGB32)
             image.fill(Qt.transparent)
             self.annotations[self.current_frame_index] = image
@@ -590,21 +721,66 @@ class MediaPlayer(QWidget):
             pen = QPen(self.draw_pen_color, self.draw_pen_width, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
             painter.setPen(pen)
             
-            # Jika alpha 0, gunakan mode "Clear" (penghapus)
             if self.draw_pen_color.alpha() == 0:
                 painter.setCompositionMode(QPainter.CompositionMode_Clear)
             
             painter.drawLine(from_point_frame, to_point_frame)
             painter.end()
             
-            # Tampilkan ulang frame dengan anotasi yang diperbarui
-            self.display_frame(self.displayed_frame_source)
+            # --- PERBAIKAN: START ---
+            if self.compare_split_ratio is None:
+                # Mode Single: refresh internal
+                self.display_frame(self.displayed_frame_source)
+            else:
+                # Mode Compare: beri tahu main_window untuk refresh
+                # (Ini akan dipanggil oleh instance A atau B)
+                self.viewNeedsRedraw.emit()
+            # --- PERBAIKAN: END ---
 
     def finalize_drawing(self):
         """
         Dipanggil saat mouse dilepas setelah menggambar.
-        Memberi sinyal ke MainWindow untuk menambahkan marka hijau.
         """
         if self.current_frame_index >= 0:
             self.annotationAdded.emit(self.current_frame_index)
-    # --- AKHIR FUNGSI DRAWING ---
+            
+    def update_cursor(self):
+        """Mengatur kursor berdasarkan state saat ini."""
+        if self.video_label.panning:
+            self.video_label.setCursor(Qt.ClosedHandCursor)
+        elif self.drawing_enabled:
+            self.video_label.setCursor(Qt.CrossCursor)
+        elif self.zoom_scale > 1.0:
+            self.video_label.setCursor(Qt.OpenHandCursor)
+        else:
+            self.video_label.setCursor(Qt.ArrowCursor)
+
+    def pan(self, delta: QPoint):
+        """Memindahkan pan offset dan menggambar ulang."""
+        self.zoom_pan += delta
+        self.display_frame(self.displayed_frame_source)
+
+    def zoom(self, delta: int, widget_pos: QPoint):
+        """Memperbesar/memperkecil di sekitar widget_pos."""
+        old_scale = self.zoom_scale
+        
+        if delta > 0:
+            self.zoom_scale *= 1.15
+        else:
+            self.zoom_scale /= 1.15
+            
+        self.zoom_scale = max(1.0, self.zoom_scale) 
+
+        if self.zoom_scale == 1.0:
+            self.zoom_pan = QPoint(0, 0)
+        else:
+            pixmap_relative_pos = widget_pos - self.pixmap_offset
+            panned_pixmap_pos = pixmap_relative_pos - self.zoom_pan
+            
+            new_pan_x = pixmap_relative_pos.x() - (panned_pixmap_pos.x() * self.zoom_scale / old_scale)
+            new_pan_y = pixmap_relative_pos.y() - (panned_pixmap_pos.y() * self.zoom_scale / old_scale)
+            
+            self.zoom_pan = QPoint(int(new_pan_x), int(new_pan_y))
+
+        self.display_frame(self.displayed_frame_source)
+        self.update_cursor()
