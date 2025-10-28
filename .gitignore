@@ -8,6 +8,7 @@ build/
 .venv/
 lib/Python*/
 lib64/
+__pycache__/
 
 # Python cache
 __pycache__/
