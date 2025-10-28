@@ -23,6 +23,7 @@ from media_player import MediaPlayer
 from media_controls import MediaControls
 from timeline_widget import TimelineWidget
 from drawing_toolbar import DrawingToolbar 
+from sequence_capture import create_media_capture
 
 # ... (Class ProjectTreeWidget tidak berubah, saya sembunyikan untuk keringkasan) ...
 class ProjectTreeWidget(QTreeWidget):
@@ -471,20 +472,22 @@ class MainWindow(QMainWindow):
             if '%' not in file_path and any(file_path.lower().endswith(ext) for ext in image_extensions):
                 duration, frame_count = 0.0, 1
             else:
-                cap = cv2.VideoCapture(file_path)
-                if cap.isOpened():
-                    fps = cap.get(cv2.CAP_PROP_FPS)
-                    f_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                capture = create_media_capture(file_path)
+                if capture and capture.isOpened():
+                    fps = capture.get(cv2.CAP_PROP_FPS) or 0.0
+                    frame_count_val = capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0.0
+                    f_count = int(frame_count_val)
                     if fps > 0 and f_count > 0:
                         duration = f_count / fps
                         frame_count = f_count
                     # Jika f_count 0 (mungkin streaming/webcam), coba baca 1 frame
                     elif f_count <= 0:
-                         ret, _ = cap.read()
+                         ret, _ = capture.read()
                          if ret:
                              frame_count = 1 # Setidaknya 1 frame
                              duration = (1.0 / fps) if fps > 0 else 0.0
-                cap.release()
+                if capture:
+                    capture.release()
         except Exception as e:
             print(f"Could not get info for {file_path}: {e}")
             duration, frame_count = 0.0, 0
