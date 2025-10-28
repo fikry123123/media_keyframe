@@ -5,6 +5,9 @@ venv/
 dist/
 build/
 *.AppImage
+.venv/
+lib/Python*/
+lib64/
 
 # Python cache
 __pycache__/
