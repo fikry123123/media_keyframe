@@ -334,6 +334,11 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Shift+]"), self).activated.connect(self.jump_and_play_next_mark)
         QShortcut(QKeySequence("Shift+["), self).activated.connect(self.jump_and_play_previous_mark)
         QShortcut(QKeySequence("Ctrl+Shift+P"), self).activated.connect(self.toggle_mark_tour)
+        
+        # --- TAMBAHAN SHORTCUT BARU ---
+        QShortcut(QKeySequence("Ctrl+Right"), self).activated.connect(self.jump_to_next_segment)
+        QShortcut(QKeySequence("Ctrl+Left"), self).activated.connect(self.jump_to_previous_segment)
+        # --- AKHIR TAMBAHAN ---
 
     def _resolve_sequences_and_files(self, file_paths):
         image_extensions = ['.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.exr', '.dpx']
@@ -592,6 +597,7 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage("Ready")
         
     def show_shortcuts_dialog(self):
+        # --- PERBARUI TEKS SHORTCUT ---
         shortcuts_text = """
             <h3>Playback</h3>
             <b>Space</b>: Play / Pause<br>
@@ -601,8 +607,10 @@ class MainWindow(QMainWindow):
             <b>End</b>: Go to Last Frame<br>
 
             <h3>Timeline Navigation</h3>
-            <b>Ctrl + Down Arrow</b>: Play Next Item in Timeline<br>
-            <b>Ctrl + Up Arrow</b>: Play Previous Item in Timeline<br>
+            <b>Ctrl + Right Arrow</b>: Jump to Next Segment (Folder/Segment Mode)<br>
+            <b>Ctrl + Left Arrow</b>: Jump to Previous Segment (Folder/Segment Mode)<br>
+            <b>Ctrl + Down Arrow</b>: Play Next Item in Timeline (Old Tree Mode)<br>
+            <b>Ctrl + Up Arrow</b>: Play Previous Item in Timeline (Old Tree Mode)<br>
 
             <h3>Marking</h3>
             <b>F</b>: Toggle Mark at Current Frame (White)<br>
@@ -627,7 +635,8 @@ class MainWindow(QMainWindow):
             <h3>View</h3>
             <b>Ctrl + T</b>: Toggle Compare Mode<br>
             <b>Ctrl + H</b>: Show / Hide Project Panel & Drawing Toolbar<br> 
-        """ # <-- Teks shortcut diperbarui
+        """
+        # --- AKHIR PERBARUAN ---
         QMessageBox.information(
             self,
             "Keyboard Shortcuts",
@@ -1275,6 +1284,9 @@ class MainWindow(QMainWindow):
         else:
             # Mode Segmen
             current_path = self.media_player.get_current_file_path()
+            if not current_path: # Bisa terjadi sesaat saat memuat
+                return 
+                
             segment_start_frame = 0
             
             # Cari frame awal segmen saat ini
@@ -1395,7 +1407,65 @@ class MainWindow(QMainWindow):
             prev_mark = all_marks[-1]
         if prev_mark is not None:
             self.seek_to_position(prev_mark)
+
+    # --- FUNGSI NAVIGASI SEGMEN BARU ---
+    def jump_to_next_segment(self):
+        """(Shortcut: Ctrl+Right) Jumps to the start of the next segment."""
+        if not self.segment_map:
+            return # Only works in segment mode
             
+        if self.media_player.is_playing or self.is_compare_playing:
+            self.toggle_play() # Stop playback
+        if self.media_player.drawing_enabled: 
+            self.set_drawing_off() 
+            
+        current_global_frame = self.timeline.current_position
+        
+        next_segment_start_frame = -1
+        
+        # Cari frame awal segmen berikutnya
+        for segment in self.segment_map:
+            if segment['start_frame'] > current_global_frame:
+                next_segment_start_frame = segment['start_frame']
+                break
+                
+        if next_segment_start_frame != -1:
+            self.seek_to_position(next_segment_start_frame)
+        else:
+            # Kita ada di segmen terakhir, lompat ke awal (frame 0)
+            self.seek_to_position(0)
+
+    def jump_to_previous_segment(self):
+        """(Shortcut: Ctrl+Left) Jumps to the start of the previous segment."""
+        if not self.segment_map:
+            return # Only works in segment mode
+
+        if self.media_player.is_playing or self.is_compare_playing:
+            self.toggle_play() # Stop playback
+        if self.media_player.drawing_enabled: 
+            self.set_drawing_off() 
+
+        current_global_frame = self.timeline.current_position
+        
+        prev_segment_start_frame = -1
+        
+        # Cari frame awal segmen *sebelumnya*
+        # Iterasi terbalik
+        for segment in reversed(self.segment_map):
+            # Kita cari segmen pertama yang mulainya SEBELUM frame kita saat ini
+            if segment['start_frame'] < current_global_frame:
+                prev_segment_start_frame = segment['start_frame']
+                break
+                
+        if prev_segment_start_frame != -1:
+            self.seek_to_position(prev_segment_start_frame)
+        else:
+            # Kita ada di segmen pertama (atau frame 0)
+            # Lompat ke awal segmen TERAKHIR
+            if self.segment_map:
+                self.seek_to_position(self.segment_map[-1]['start_frame'])
+    # --- AKHIR FUNGSI NAVIGASI SEGMEN ---
+
     def jump_and_play_next_mark(self):
         self.jump_to_next_mark()
         if not self.media_player.is_playing:
