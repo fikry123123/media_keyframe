@@ -370,12 +370,18 @@ class MediaPlayer(QWidget):
                     self.total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
                     self.fps = cap.get(cv2.CAP_PROP_FPS) or 24 
                     if self.fps == 0: self.fps = 24
+                    
+                    # --- PERBAIKAN BUG: START ---
+                    # Pindahkan ini *sebelum* sinyal frameIndexChanged
+                    self.current_media_path = file_path 
+                    # --- PERBAIKAN BUG: END ---
+                    
                     self.current_frame_index = int(cap.get(cv2.CAP_PROP_POS_FRAMES)) - 1
                     self.display_frame(frame) # Ini akan mengatur self.displayed_frame_source
                     self.frameIndexChanged.emit(self.current_frame_index, self.total_frames)
                     self.fpsChanged.emit(self.fps)
                     self.frameReady.emit()
-                    self.current_media_path = file_path
+                    # self.current_media_path = file_path <-- POSISI LAMA
                     self.has_finished = False 
                     self.playback_start_time = None
                     self._prepare_audio(file_path if '%' not in file_path else None) 
@@ -389,6 +395,12 @@ class MediaPlayer(QWidget):
             if frame is not None:
                 self.is_video = False
                 self.current_frame = frame
+                
+                # --- PERBAIKAN BUG: START ---
+                # Pindahkan ini *sebelum* sinyal frameIndexChanged
+                self.current_media_path = file_path
+                # --- PERBAIKAN BUG: END ---
+                
                 # self.displayed_frame_source diatur dalam display_frame
                 self.total_frames = 1
                 self.current_frame_index = 0
@@ -396,7 +408,7 @@ class MediaPlayer(QWidget):
                 self.frameIndexChanged.emit(0, 1)
                 self.fpsChanged.emit(0.0)
                 self.frameReady.emit()
-                self.current_media_path = file_path
+                # self.current_media_path = file_path <-- POSISI LAMA
                 self.has_finished = False
                 self.playback_start_time = None
                 self._prepare_audio(None)
