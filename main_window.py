@@ -783,10 +783,49 @@ class MainWindow(QMainWindow):
     def delete_selected_items_handler(self):
         selected_items = self.playlist_widget.selectedItems()
         if not selected_items: return
+        removed_paths = set()
+        timeline_modified = False
         for item in list(selected_items):
-            if item.parent():
-                item.parent().removeChild(item)
+            parent = item.parent()
+            if not parent:
+                continue
+            removed_paths.update(self._collect_media_paths_recursive(item))
+            if not timeline_modified and self._is_in_timeline_branch(item):
+                timeline_modified = True
+            parent.removeChild(item)
+
+        removed_paths_normalized = removed_paths
+        if removed_paths_normalized:
+            cache_keys_to_remove = [
+                key for key in list(self.media_info_cache.keys())
+                if self._normalize_media_path(key) in removed_paths_normalized
+            ]
+            for key in cache_keys_to_remove:
+                self.media_info_cache.pop(key, None)
+        current_a = self._normalize_media_path(self.media_player.get_current_file_path())
+        current_b = self._normalize_media_path(self.media_player_2.get_current_file_path()) if self.compare_mode else None
+
+        cleared_media = False
+        if current_a and current_a in removed_paths_normalized:
+            self.media_player.clear_media()
+            cleared_media = True
+        if self.compare_mode and current_b and current_b in removed_paths_normalized:
+            self.media_player_2.clear_media()
+            cleared_media = True
+
+        if cleared_media:
+            self.clear_all_marks(clear_segments=True)
+
+        if removed_paths_normalized and self.segment_map:
+            if any(self._normalize_media_path(segment['path']) in removed_paths_normalized for segment in self.segment_map):
+                self.segment_map.clear()
+                self.current_segment_total_frames = 0
+                self.timeline.set_segments([], 0)
+
         self.update_total_duration()
+        self.update_playlist_item_indicator()
+        if removed_paths_normalized or timeline_modified:
+            self.status_bar.showMessage("Selected items removed.", 2000)
     
     def set_playback_mode(self, mode):
         self.playback_mode = mode
@@ -1579,6 +1618,32 @@ class MainWindow(QMainWindow):
             else:
                 # Ini adalah sub-folder, cari di dalamnya
                 self._collect_videos_recursive(child, video_list)
+
+    def _normalize_media_path(self, path):
+        if not path:
+            return None
+        try:
+            return os.path.abspath(path)
+        except Exception:
+            return path
+
+    def _collect_media_paths_recursive(self, item):
+        paths = set()
+        path = item.data(0, Qt.UserRole)
+        if path:
+            paths.add(self._normalize_media_path(path))
+        for i in range(item.childCount()):
+            child = item.child(i)
+            paths.update(self._collect_media_paths_recursive(child))
+        return paths
+
+    def _is_in_timeline_branch(self, item):
+        parent = item
+        while parent:
+            if parent == self.timeline_item:
+                return True
+            parent = parent.parent()
+        return False
 
     # --- FUNGSI BARU UNTUK MEMUAT SEGMEN ---
     def load_folder_segments(self, folder_item):
