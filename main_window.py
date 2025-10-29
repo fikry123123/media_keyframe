@@ -1134,12 +1134,24 @@ class MainWindow(QMainWindow):
                                 self.loop_out_point is not None and
                                 self.media_player.current_frame_index >= self.loop_out_point)
             
+            # --- PERBAIKAN: Logika restart "Play Once" ---
             if self.media_player.has_finished and not is_in_loop_range:
-                self.media_player.seek_to_position(0)
-                self.media_player.has_finished = False
+                if self.segment_map:
+                    # Mode Segmen: panggil seek_to_position GLOBAL (MainWindow)
+                    # untuk pindah ke segmen pertama (frame global 0)
+                    self.seek_to_position(0) 
+                else:
+                    # Mode Normal: panggil seek_to_position LOKAL (MediaPlayer)
+                    self.media_player.seek_to_position(0)
+                
+                # Flag 'has_finished' akan di-reset oleh media_player.seek_to_position
+                # atau di dalam self.seek_to_position (via load_single_file -> media_player.load_media)
+                # Tapi kita set manual di sini untuk player internal
+                self.media_player.has_finished = False 
+            
             elif is_in_loop_range:
-                # media_player.toggle_play() akan memanggil update_video_frame
-                # yang sudah memiliki logika loop range
+                 # media_player.toggle_play() akan memanggil update_video_frame
+                 # yang sudah memiliki logika loop range
                  pass
             # --- AKHIR PERBAIKAN ---
             
@@ -1160,19 +1172,32 @@ class MainWindow(QMainWindow):
             return # Selesai untuk frame "tick" ini
         # --- PERBAIKAN: END ---
 
-        # Jika tidak looping, maju ke frame berikutnya
-        self.media_player.next_frame()
-        self.media_player_2.next_frame()
-        self.update_composite_view()
+        # --- PERBAIKAN BUG: LOGIKA COMPARE MODE BARU ---
         
-        # Cek kondisi selesai
-        finished_a = not self.media_player.has_media() or self.media_player.current_frame_index >= self.media_player.total_frames - 1
-        finished_b = not self.media_player_2.has_media() or self.media_player_2.current_frame_index >= self.media_player_2.total_frames - 1
+        # 1. Tentukan apakah A dan B sudah selesai
+        #    Kita perlu (total_frames > 0) untuk menangani media kosong atau gambar (total_frames=1)
+        finished_a = not self.media_player.has_media() or \
+                     (self.media_player.total_frames > 0 and self.media_player.current_frame_index >= self.media_player.total_frames - 1)
         
+        finished_b = not self.media_player_2.has_media() or \
+                     (self.media_player_2.total_frames > 0 and self.media_player_2.current_frame_index >= self.media_player_2.total_frames - 1)
+
+        # 2. Jika KEDUANYA selesai, hentikan timer
         if finished_a and finished_b:
-            # Panggil handle_playback_finished.
             self.compare_timer.stop()
             self.handle_playback_finished() # Ini akan cek mode LOOP, dll.
+            return # Jangan update lagi
+
+        # 3. Jika salah satu belum selesai, panggil next_frame HANYA untuk yang belum selesai
+        if not finished_a:
+            self.media_player.next_frame()
+        
+        if not finished_b:
+            self.media_player_2.next_frame()
+
+        # 4. Tampilkan hasilnya (salah satu/keduanya akan di-update)
+        self.update_composite_view()
+        # --- AKHIR PERBAIKAN BUG ---
             
     def previous_frame(self):
         if self.is_compare_playing: return
