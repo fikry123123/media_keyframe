@@ -25,7 +25,6 @@ from timeline_widget import TimelineWidget
 from drawing_toolbar import DrawingToolbar 
 from sequence_capture import create_media_capture
 
-# ... (Class ProjectTreeWidget tidak berubah, saya sembunyikan untuk keringkasan) ...
 class ProjectTreeWidget(QTreeWidget):
     filesDroppedOnTarget = pyqtSignal(list, object)
     treeChanged = pyqtSignal()
@@ -184,7 +183,7 @@ class ProjectTreeWidget(QTreeWidget):
         if source_changed:
             self.treeChanged.emit()
         if timeline_reordered:
-            self.timelineOrderChanged.emit() # <-- Panggil sinyal baru
+            self.timelineOrderChanged.emit()
 
 class PlaybackMode(Enum):
     LOOP = auto()
@@ -1453,42 +1452,80 @@ class MainWindow(QMainWindow):
             # --- AKHIR LOGIKA SEGMEN ---
             
     def open_file(self):
-        # Minta pengguna memilih satu atau lebih file
         file_paths, _ = QFileDialog.getOpenFileNames(
             self, 
             "Open Media File(s)", 
-            "", # Direktori awal (kosong = terakhir digunakan)
+            "", 
             "Media Files (*.mp4 *.avi *.mov *.mkv *.jpg *.png *.jpeg *.bmp *.tiff *.exr *.dpx);;All Files (*)"
         )
         
         if file_paths:
-            # Proses file yang dipilih (bisa jadi sequence)
             resolved_media = self._resolve_sequences_and_files(file_paths)
             if not resolved_media:
                 self.status_bar.showMessage("No valid media found in selection.", 3000)
                 return
                 
-            # Tambahkan semua media yang ditemukan ke Source panel
             self.add_files_to_source(resolved_media)
-            self.update_total_duration() # Perbarui total durasi
+            self.update_total_duration() 
 
-            # Muat item pertama yang dipilih ke player
             item_to_load = resolved_media[0]
-            # Dapatkan path asli (bukan display name)
             path_to_load = item_to_load[0] if isinstance(item_to_load, tuple) else item_to_load
             
             # --- PERBAIKAN: Hapus argumen 'clear_marks' ---
             self.load_single_file(path_to_load, clear_segments=True)
             # --- AKHIR PERBAIKAN ---
 
-            # Pilih item yang baru dimuat di tree Source (jika ditemukan)
             item_in_tree = self.find_item_by_path_recursive(path_to_load, self.source_item)
             if item_in_tree:
                 self.playlist_widget.setCurrentItem(item_in_tree)
             
-    def open_image_sequence(self, file_paths):
-        folder_path = QFileDialog.getExistingDirectory(self, "Select Folder", "")
-        if folder_path: pass
+    def open_image_sequence(self):
+        # 1. Minta folder, bukan file
+        folder_path = QFileDialog.getExistingDirectory(self, "Select Folder Containing Image Sequences", "")
+        
+        if folder_path:
+            # 2. Cari semua file media yang didukung
+            supported_extensions = [
+                '*.mp4', '*.avi', '*.mov', '*.mkv', 
+                '*.jpg', '*.jpeg', '*.png', '*.bmp', '*.tiff',
+                '*.exr', '*.dpx'
+            ]
+            
+            all_files_in_dir = []
+            for ext in supported_extensions:
+                # Cari secara rekursif (di dalam subfolder juga)
+                search_path = os.path.join(folder_path, '**', ext)
+                all_files_in_dir.extend(glob.glob(search_path, recursive=True))
+                
+            if not all_files_in_dir:
+                self.status_bar.showMessage("No supported media files found in the selected folder.", 3000)
+                return
+
+            # 3. Sortir dan gunakan resolver untuk mengelompokkan
+            all_files_in_dir.sort()
+            resolved_media = self._resolve_sequences_and_files(all_files_in_dir)
+
+            if not resolved_media:
+                self.status_bar.showMessage("Could not resolve any sequences or files.", 3000)
+                return
+
+            # 4. Tambahkan semua yang ditemukan ke Source
+            self.add_files_to_source(resolved_media)
+            self.update_total_duration()
+
+            # 5. Muat item pertama yang ditemukan
+            item_to_load = resolved_media[0]
+            path_to_load = item_to_load[0] if isinstance(item_to_load, tuple) else item_to_load
+            
+            # Panggil load_single_file dengan argumen yang benar
+            self.load_single_file(path_to_load, clear_segments=True)
+
+            # Pilih item di tree
+            item_in_tree = self.find_item_by_path_recursive(path_to_load, self.source_item)
+            if item_in_tree:
+                self.playlist_widget.setCurrentItem(item_in_tree)
+            
+            self.status_bar.showMessage(f"Loaded {len(resolved_media)} item(s) from folder.", 3000)
     
     def _collect_media_paths_recursive(self, parent_item):
         """
