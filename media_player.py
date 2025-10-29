@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import QLabel, QVBoxLayout, QWidget, QSizePolicy
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QMimeData, QUrl, QPoint, QSize
 from PyQt5.QtGui import QPixmap, QImage, QDragEnterEvent, QDropEvent, QPainter, QPen, QColor
 from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
+from sequence_capture import create_media_capture
 
 class DrawingLabel(QLabel):
     """
@@ -441,11 +442,11 @@ class MediaPlayer(QWidget):
             
         self.current_media_path = None
         try:
-            cap = cv2.VideoCapture(file_path, cv2.CAP_FFMPEG)
-            if cap.isOpened():
-                ret, frame = cap.read()
+            capture = create_media_capture(file_path)
+            if capture and capture.isOpened():
+                ret, frame = capture.read()
                 if ret:
-                    self.video_capture = cap
+                    self.video_capture = capture
                     self.is_video = True
                     self.current_frame = frame
                     # self.displayed_frame_source diatur dalam display_frame
@@ -468,11 +469,16 @@ class MediaPlayer(QWidget):
                     self.playback_start_time = None
                     self._prepare_audio(file_path if '%' not in file_path else None) 
                     return True
-                else:
-                    cap.release()
-            else:
-                cap.release()
-            
+                capture.release()
+            elif capture:
+                capture.release()
+
+            if '%' in file_path:
+                self.video_label.setText("Sequence frames not found...")
+                self.frameIndexChanged.emit(-1, 0)
+                self.fpsChanged.emit(0.0)
+                return False
+
             frame = cv2.imread(file_path)
             if frame is not None:
                 self.is_video = False
