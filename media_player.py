@@ -72,36 +72,60 @@ class DrawingLabel(QLabel):
         else:
             super().mousePressEvent(event) # teruskan klik lain
 
-    def mouseMoveEvent(self, event):
-        # --- TAMBAHAN BARU: Logika Pan ---
-        if self.panning:
-            delta = event.pos() - self.last_pan_pos
-            self.media_player.pan_offset += delta
-            self.last_pan_pos = event.pos()
-            # Tampilkan ulang frame dengan pan baru
-            if self.media_player.displayed_frame_source is not None:
-                self.media_player.display_frame(self.media_player.displayed_frame_source)
-            event.accept()
-        # --- AKHIR TAMBAHAN ---
+    def mousePressEvent(self, event):
+        # --- PERBAIKAN LOGIKA PANNING ---
+        
+        # Prioritas 1: Panning Tombol Tengah (Selalu berfungsi jika di-zoom)
+        if event.button() == Qt.MiddleButton:
+            # Hanya pan jika di-zoom (faktor > 1.0)
+            if self.media_player.zoom_factor > 1.001: 
+                self.panning = True
+                self.last_pan_pos = event.pos()
+                self.setCursor(Qt.ClosedHandCursor)
+                event.accept()
+                return # Selesai
             
-        elif self.drawing and self.media_player.drawing_enabled:
-            frame_pos = self._map_widget_to_frame_coords(event.pos())
-            if frame_pos:
-                # Gambar garis dari titik terakhir ke titik sekarang
-                self.media_player.draw_on_annotation(self.last_point_frame, frame_pos)
-                self.last_point_frame = frame_pos
-        else:
-            super().mouseMoveEvent(event)
+        # Prioritas 2: Tombol Kiri
+        if event.button() == Qt.LeftButton:
+            # Jika mode drawing AKTIF, mulai menggambar
+            if self.media_player.drawing_enabled and self.media_player.has_media():
+                frame_pos = self._map_widget_to_frame_coords(event.pos())
+                if frame_pos:
+                    self.drawing = True
+                    self.last_point_frame = frame_pos
+                    self.media_player.get_current_annotation_image() # Pastikan layer anotasi ada
+                    # Gambar satu titik untuk klik tunggal
+                    self.media_player.draw_on_annotation(frame_pos, frame_pos) 
+                    event.accept()
+                    return # Selesai
+
+            # Jika mode drawing MATI dan di-zoom, mulai panning
+            elif not self.media_player.drawing_enabled and self.media_player.zoom_factor > 1.001:
+                self.panning = True
+                self.last_pan_pos = event.pos()
+                self.setCursor(Qt.ClosedHandCursor)
+                event.accept()
+                return # Selesai
+                
+        # --- AKHIR PERBAIKAN ---
+            
+        # Jika tidak ada yg ditangani, teruskan
+        super().mousePressEvent(event) # teruskan klik lain
 
     def mouseReleaseEvent(self, event):
+        # --- PERBAIKAN LOGIKA PANNING ---
+
+        # Cek 1: Selesai menggambar (HANYA tombol Kiri)
         if event.button() == Qt.LeftButton and self.drawing:
             self.drawing = False
             self.last_point_frame = None
             # Beri tahu media player bahwa gambar telah ditambahkan/diubah
             self.media_player.finalize_drawing() 
-            
-        # --- TAMBAHAN BARU: Logika Pan ---
-        elif event.button() == Qt.MiddleButton and self.panning:
+            event.accept()
+            return # Selesai
+
+        # Cek 2: Selesai panning (bisa dari Tombol Kiri ATAU Tengah)
+        if (event.button() == Qt.LeftButton or event.button() == Qt.MiddleButton) and self.panning:
             self.panning = False
             # Kembalikan kursor ke status yang benar
             if self.media_player.drawing_enabled:
@@ -109,10 +133,68 @@ class DrawingLabel(QLabel):
             else:
                 self.setCursor(Qt.ArrowCursor)
             event.accept()
-        # --- AKHIR TAMBAHAN ---
+            return # Selesai
             
-        else:
-            super().mouseReleaseEvent(event)
+        # --- AKHIR PERBAIKAN ---
+            
+        super().mouseReleaseEvent(event)
+        
+    def mouseMoveEvent(self, event):
+        
+        # --- PERBAIKAN: Tambahkan pengecekan event.buttons() ---
+        
+        # Cek 1: Apakah kita sedang dalam mode Panning? (flag-nya True)
+        # DAN Apakah Tombol Kiri ATAU Tengah sedang DITEKAN?
+        if self.panning and (event.buttons() & Qt.LeftButton or event.buttons() & Qt.MiddleButton):
+            
+            if self.media_player.frame_dims is None:
+                event.accept()
+                return
+                
+            delta = event.pos() - self.last_pan_pos
+            new_pan_offset = self.media_player.pan_offset + delta
+            
+            # --- Logika Batasan (Limiting) ---
+            h, w, ch = self.media_player.frame_dims
+            widget_size = self.media_player.size()
+            scale_w = widget_size.width() / w if w > 0 else 0
+            scale_h = widget_size.height() / h if h > 0 else 0
+            base_scale = min(scale_w, scale_h) if min(scale_w, scale_h) > 0 else 1.0
+            total_scale = base_scale * self.media_player.zoom_factor
+            scaled_w = int(w * total_scale)
+            scaled_h = int(h * total_scale)
+            center_x = (widget_size.width() - scaled_w) // 2
+            center_y = (widget_size.height() - scaled_h) // 2
+            max_pan_x = -center_x
+            min_pan_x = widget_size.width() - scaled_w - center_x
+            max_pan_y = -center_y
+            min_pan_y = widget_size.height() - scaled_h - center_y
+            final_pan_x = max(min_pan_x, min(new_pan_offset.x(), max_pan_x))
+            final_pan_y = max(min_pan_y, min(new_pan_offset.y(), max_pan_y))
+            
+            self.media_player.pan_offset = QPoint(final_pan_x, final_pan_y)
+            # --- Akhir Logika Batasan ---
+
+            self.last_pan_pos = event.pos()
+            
+            if self.media_player.displayed_frame_source is not None:
+                self.media_player.display_frame(self.media_player.displayed_frame_source)
+            event.accept()
+            return # Selesai
+            
+        # Cek 2: Apakah kita sedang dalam mode Drawing? (flag-nya True)
+        # DAN Apakah Tombol Kiri sedang DITEKAN?
+        elif self.drawing and self.media_player.drawing_enabled and (event.buttons() & Qt.LeftButton):
+            frame_pos = self._map_widget_to_frame_coords(event.pos())
+            if frame_pos:
+                self.media_player.draw_on_annotation(self.last_point_frame, frame_pos)
+                self.last_point_frame = frame_pos
+                event.accept()
+                return # Selesai
+                
+        # Cek 3: Jika tidak ada tombol yg ditekan (hanya mouse-over)
+        # biarkan super() menanganinya (untuk update kursor, dll)
+        super().mouseMoveEvent(event)
 
     # --- TAMBAHAN BARU: Fungsi WheelEvent ---
     def wheelEvent(self, event):
