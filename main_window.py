@@ -763,58 +763,94 @@ class MainWindow(QMainWindow):
     def clear_current_frame_drawing(self):
         """Menghapus anotasi (drawing) dan marka hijau terkait."""
         
-        global_idx = self.timeline.current_position
-        if global_idx < 0:
-            return
+        current_global_frame = self.timeline.current_position
+        if current_global_frame < 0: return
         
         annotation_removed = False
-        mark_removed = False
+        mark_removed = False # Flag apakah marka hijau dihapus dari cache
         
-        # 1. Tentukan file mana yang akan dimodifikasi
-        paths_to_modify_marks = []
-        path_a = self.media_player.get_current_file_path() 
+        target_path_a = self.media_player.get_current_file_path() 
+        target_local_frame_a = -1 # Frame lokal untuk gambar di player A
         
-        if self.compare_mode:
-            path_b = self.media_player_2.get_current_file_path()
-            if path_a: paths_to_modify_marks.append(path_a)
-            if path_b: paths_to_modify_marks.append(path_b)
-        elif path_a: # Mode Single / Segmen
-            paths_to_modify_marks.append(path_a)
+        paths_to_modify_marks = [] # Path cache untuk marka hijau
+        target_local_frames_marks = [] # Frame lokal untuk marka hijau
+        is_segment_mode = bool(self.segment_map)
 
-        # 2. Hapus GAMBAR (drawing) hanya dari Player A
-        local_idx = self.media_player.current_frame_index
-        if local_idx in self.media_player.annotations:
-            self.media_player.annotations.pop(local_idx)
-            annotation_removed = True
-            if path_a:
-                data_a = self._get_or_create_media_data(path_a)
-                if local_idx in data_a["annotations"]:
-                    data_a["annotations"].pop(local_idx)
+        # --- 1. Tentukan target & frame lokal ---
+        if is_segment_mode:
+            target_segment = None
+            for segment in self.segment_map:
+                seg_end_frame = segment['start_frame'] + segment['duration']
+                if current_global_frame >= segment['start_frame'] and current_global_frame < seg_end_frame:
+                    target_segment = segment
+                    break
+            if target_segment:
+                if target_path_a == target_segment['path']:
+                    target_local_frame_a = current_global_frame - target_segment['start_frame']
+                    paths_to_modify_marks.append(target_path_a)
+                    target_local_frames_marks.append(target_local_frame_a)
+                else: return # Error
+            else: return # Gagal
+                 
+        elif self.compare_mode:
+            path_b = self.media_player_2.get_current_file_path()
+            target_local_frame_a = current_global_frame 
             
-        # 3. Hapus MARKA (hijau) dari state UI
-        if global_idx in self.annotation_marks:
-            self.annotation_marks.remove(global_idx)
-            mark_removed = True
+            if target_path_a:
+                 paths_to_modify_marks.append(target_path_a)
+                 target_local_frames_marks.append(current_global_frame)
+            if path_b:
+                 paths_to_modify_marks.append(path_b)
+                 target_local_frames_marks.append(current_global_frame)
+                 
+        elif target_path_a: # Mode Single
+            target_local_frame_a = current_global_frame 
+            paths_to_modify_marks.append(target_path_a)
+            target_local_frames_marks.append(current_global_frame)
+        
+        if target_local_frame_a < 0 and not paths_to_modify_marks: return
+
+        # --- 2. Hapus GAMBAR (drawing) hanya dari Player A ---
+        if target_path_a and target_local_frame_a >= 0:
+            if target_local_frame_a in self.media_player.annotations:
+                self.media_player.annotations.pop(target_local_frame_a)
+                annotation_removed = True
+                data_a = self._get_or_create_media_data(target_path_a)
+                if target_local_frame_a in data_a["annotations"]:
+                    data_a["annotations"].pop(target_local_frame_a)
             
-        # 4. Sinkronkan penghapusan MARKA ke semua cache file yang relevan
-        for path in paths_to_modify_marks:
+        # --- 3. Hapus MARKA (hijau) dari semua cache file yang relevan ---
+        for i, path in enumerate(paths_to_modify_marks):
+            local_frame = target_local_frames_marks[i]
             data = self._get_or_create_media_data(path)
-            if global_idx in data["annotation_marks"]:
-                data["annotation_marks"].remove(global_idx)
-            
-        if mark_removed:
-            self.timeline.set_annotation_marks(self.annotation_marks)
-            
+            if local_frame in data["annotation_marks"]:
+                data["annotation_marks"].remove(local_frame)
+                mark_removed = True # Set flag jika ada yg benar-benar dihapus
+
+        # --- 4. Update state global & UI ---
+        if mark_removed: # Hanya update jika ada perubahan di cache
+            if is_segment_mode:
+                # Bangun ulang state global dari semua cache segmen
+                self._rebuild_global_marks_from_segments()
+            else:
+                 # Mode single/compare: Update state global langsung
+                if current_global_frame in self.annotation_marks:
+                    self.annotation_marks.remove(current_global_frame)
+                # Update UI timeline dari state global
+                self.timeline.set_annotation_marks(self.annotation_marks) 
+
+        # --- 5. Tampilkan pesan & refresh player jika gambar dihapus ---
         if annotation_removed:
             if self.compare_mode:
                 self.update_composite_view()
             else:
                 self.media_player.display_frame(self.media_player.displayed_frame_source)
-            self.status_bar.showMessage(f"Drawing cleared from frame {local_idx + 1}", 2000)
+            self.status_bar.showMessage(f"Drawing cleared from frame {target_local_frame_a + 1}", 2000)
         elif mark_removed:
-             self.status_bar.showMessage(f"Annotation mark cleared from frame {global_idx + 1}", 2000)
+             self.status_bar.showMessage(f"Annotation mark cleared from frame {current_global_frame + 1}", 2000)
         else:
-            self.status_bar.showMessage(f"No drawing found on frame {local_idx + 1}", 2000)
+             local_idx_display = target_local_frame_a if target_local_frame_a >=0 else self.media_player.current_frame_index
+             self.status_bar.showMessage(f"No drawing found on frame {local_idx_display + 1}", 2000)
 
     def _shortcut_clear_all_marks(self):
         """
@@ -930,34 +966,59 @@ class MainWindow(QMainWindow):
     def add_annotation_mark(self, frame_index):
         """Slot untuk menerima sinyal 'annotationAdded' dari MediaPlayer."""
         
-        global_frame_index = self.timeline.current_position
+        current_global_frame = self.timeline.current_position
+        if current_global_frame < 0: return
             
-        if global_frame_index < 0:
-            return
-            
-        if global_frame_index in self.annotation_marks:
-            return
-            
-        # 1. Terapkan ke state UI (gabungan)
-        self.annotation_marks.add(global_frame_index)
+        target_path = None
+        target_local_frame = -1
+        is_segment_mode = bool(self.segment_map)
 
-        # 2. Tentukan file mana yang akan dimodifikasi
-        paths_to_modify = []
-        if self.compare_mode:
+        # --- 1. Tentukan target & frame lokal ---
+        if is_segment_mode:
+            target_segment = None
+            for segment in self.segment_map:
+                seg_end_frame = segment['start_frame'] + segment['duration']
+                if current_global_frame >= segment['start_frame'] and current_global_frame < seg_end_frame:
+                    target_segment = segment
+                    break
+            if target_segment:
+                target_path = target_segment['path']
+                target_local_frame = current_global_frame - target_segment['start_frame']
+            else: return # Gagal
+                 
+        elif self.compare_mode:
             path_a = self.media_player.get_current_file_path()
             path_b = self.media_player_2.get_current_file_path()
-            if path_a: paths_to_modify.append(path_a)
-            if path_b: paths_to_modify.append(path_b)
-        elif self.media_player.has_media(): # Mode Single / Segmen
-            path_a = self.media_player.get_current_file_path()
-            if path_a: paths_to_modify.append(path_a)
-        
-        # 3. Simpan marka hijau ke semua cache file yang relevan
-        for path in paths_to_modify:
-            data = self._get_or_create_media_data(path)
-            data["annotation_marks"].add(global_frame_index)
+            target_local_frame = current_global_frame 
+            target_path = path_a # Target utama A
             
-        self.timeline.set_annotation_marks(self.annotation_marks)
+            # Modifikasi cache B (jika ada)
+            if path_b:
+                data_b = self._get_or_create_media_data(path_b)
+                data_b["annotation_marks"].add(target_local_frame)
+                
+        elif self.media_player.has_media(): # Mode Single
+            target_path = self.media_player.get_current_file_path()
+            target_local_frame = current_global_frame
+        
+        if not target_path or target_local_frame < 0: return
+
+        # --- 2. Modifikasi cache target utama ---
+        data = self._get_or_create_media_data(target_path)
+        # Hanya tambahkan jika belum ada di cache (mencegah duplikasi jika sinyal terkirim ganda)
+        if target_local_frame in data["annotation_marks"]:
+             return 
+        data["annotation_marks"].add(target_local_frame)
+        
+        # --- 3. Update state global & UI ---
+        if is_segment_mode:
+            # Bangun ulang state global dari semua cache segmen
+            self._rebuild_global_marks_from_segments()
+        else:
+            # Mode single/compare: Update state global langsung
+            self.annotation_marks.add(current_global_frame)
+            # Update UI timeline dari state global
+            self.timeline.set_annotation_marks(self.annotation_marks)
     
     def handle_file_drop_on_player(self, file_path, target_view):
         resolved_media = self._resolve_sequences_and_files([file_path])
@@ -1544,47 +1605,71 @@ class MainWindow(QMainWindow):
     def update_frame_counter_B(self, cf, tf): pass
     
     def toggle_mark_at_current_frame(self):
-        # Selalu gunakan posisi timeline GLOBAL
         current_global_frame = self.timeline.current_position
         if current_global_frame < 0: return
 
-        # 1. Tentukan file mana yang akan dimodifikasi
-        paths_to_modify = []
-        if self.compare_mode:
+        target_path = None
+        target_local_frame = -1
+        is_segment_mode = bool(self.segment_map)
+        
+        # --- 1. Tentukan target & frame lokal ---
+        if is_segment_mode:
+            target_segment = None
+            for segment in self.segment_map:
+                seg_end_frame = segment['start_frame'] + segment['duration']
+                if current_global_frame >= segment['start_frame'] and current_global_frame < seg_end_frame:
+                    target_segment = segment
+                    break
+            if target_segment:
+                target_path = target_segment['path']
+                target_local_frame = current_global_frame - target_segment['start_frame']
+            else: return # Gagal
+                 
+        elif self.compare_mode:
             path_a = self.media_player.get_current_file_path()
             path_b = self.media_player_2.get_current_file_path()
-            if path_a: paths_to_modify.append(path_a)
-            if path_b: paths_to_modify.append(path_b)
-        elif self.media_player.has_media(): # Mode Single / Segmen
-            path_a = self.media_player.get_current_file_path()
-            if path_a: paths_to_modify.append(path_a)
+            target_local_frame = current_global_frame # global == local di compare
+            target_path = path_a # Target utama A
+            
+            # Modifikasi cache B (jika ada)
+            if path_b:
+                data_b = self._get_or_create_media_data(path_b)
+                if current_global_frame in data_b["marks"]: 
+                    data_b["marks"].remove(target_local_frame)
+                elif target_local_frame not in data_b["marks"]:
+                    data_b["marks"].append(target_local_frame); data_b["marks"].sort()
+            
+        elif self.media_player.has_media(): # Mode Single
+            target_path = self.media_player.get_current_file_path()
+            target_local_frame = current_global_frame # global == local di single
         
-        if not paths_to_modify:
-            return
+        if not target_path or target_local_frame < 0: return
 
-        # 2. Cek state UI saat ini (self.marks adalah gabungan)
-        is_removing = current_global_frame in self.marks
+        # --- 2. Modifikasi cache target utama ---
+        data = self._get_or_create_media_data(target_path)
+        is_removing = target_local_frame in data["marks"] # Cek state di cache
 
-        # 3. Terapkan perubahan ke state UI dan semua cache file
         if is_removing:
-            self.marks.remove(current_global_frame)
-            for path in paths_to_modify:
-                data = self._get_or_create_media_data(path)
-                if current_global_frame in data["marks"]:
-                    data["marks"].remove(current_global_frame)
+            data["marks"].remove(target_local_frame)
             self.status_bar.showMessage(f"Mark removed from frame {current_global_frame + 1}", 2000)
         else:
-            self.marks.append(current_global_frame)
-            self.marks.sort()
-            for path in paths_to_modify:
-                data = self._get_or_create_media_data(path)
-                if current_global_frame not in data["marks"]:
-                    data["marks"].append(current_global_frame)
-                    data["marks"].sort()
+            data["marks"].append(target_local_frame)
+            data["marks"].sort()
             self.status_bar.showMessage(f"Mark added at frame {current_global_frame + 1}", 2000)
-            
-        self.timeline.set_marks(self.marks)
 
+        # --- 3. Update state global & UI ---
+        if is_segment_mode:
+            # Bangun ulang state global dari semua cache segmen
+            self._rebuild_global_marks_from_segments() 
+        else:
+            # Mode single/compare: Update state global langsung
+            if is_removing:
+                if current_global_frame in self.marks: self.marks.remove(current_global_frame)
+            else:
+                if current_global_frame not in self.marks: self.marks.append(current_global_frame); self.marks.sort()
+            # Update UI timeline dari state global
+            self.timeline.set_marks(self.marks)
+            
     def clear_all_marks(self, clear_segments=True):
         marks_cleared = len(self.marks) > 0
         annotations_cleared = len(self.annotation_marks) > 0
@@ -1895,11 +1980,10 @@ class MainWindow(QMainWindow):
         if self.compare_mode:
             self.toggle_compare_mode(False)
         
-        # 1. Simpan data file sebelumnya (jika ada)
+        # 1. Simpan data file sebelumnya
         self._save_current_media_data()
         
-        # 2. Bersihkan state aktif SEKARANG (self.marks, dll.)
-        # Ini akan membersihkan tampilan timeline sebelum kita coba muat
+        # 2. Bersihkan state aktif awal (termasuk timeline UI)
         self.clear_all_marks(clear_segments=True) 
             
         self.current_segment_folder_item = folder_item 
@@ -1909,22 +1993,18 @@ class MainWindow(QMainWindow):
         video_items = []
         self._collect_videos_recursive(folder_item, video_items)
         
-        # --- PERBAIKAN BAGIAN 1: Handle folder kosong ---
         if not video_items:
             self.status_bar.showMessage(f"Folder '{folder_item.text(0)}' contains no playable media.", 3000)
-            # Pastikan player dan UI benar-benar bersih
             self.media_player.clear_media() 
-            self.update_frame_counter(-1, 0) # Reset timeline UI
-            self.update_total_duration(self.timeline_item) # Update label durasi total
-            self.update_playlist_item_indicator() # Hapus indikator (A)
+            self.update_frame_counter(-1, 0) 
+            self.update_total_duration(self.timeline_item) 
+            self.update_playlist_item_indicator() 
             return
-        # --- AKHIR PERBAIKAN 1 ---
 
-        # Bangun peta segmen
+        # 3. Bangun peta segmen
         for item in video_items:
             path = item.data(0, Qt.UserRole)
             duration, frame_count = self.get_media_info(path)
-            
             if frame_count > 0:
                 self.segment_map.append({
                     'item': item, 
@@ -1934,25 +2014,34 @@ class MainWindow(QMainWindow):
                 })
                 self.current_segment_total_frames += frame_count
         
-        # --- PERBAIKAN BAGIAN 2: Handle jika tidak ada media yg bisa dibaca ---
         if not self.segment_map:
              self.status_bar.showMessage(f"Could not read media in '{folder_item.text(0)}'.", 3000)
-             # Pastikan player dan UI benar-benar bersih
              self.media_player.clear_media() 
-             self.update_frame_counter(-1, 0) # Reset timeline UI
-             self.update_total_duration(self.timeline_item) # Update label durasi total
-             self.update_playlist_item_indicator() # Hapus indikator (A)
+             self.update_frame_counter(-1, 0) 
+             self.update_total_duration(self.timeline_item) 
+             self.update_playlist_item_indicator() 
              return
-        # --- AKHIR PERBAIKAN 2 ---
 
+        # 4. Bangun ulang marka global DARI CACHE
+        #    (Ini akan memanggil self.timeline.set_marks)
+        self._rebuild_global_marks_from_segments() 
+
+        # --- PERBAIKAN: Atur timeline SEBELUM memuat video pertama ---
+        # 5. Dapatkan batas segmen
         segment_boundaries = [s['start_frame'] for s in self.segment_map]
         
-        # Muat file pertama (INI AKAN MEMUAT MARKANYA JIKA ADA)
-        first_video_path = self.segment_map[0]['path']
-        # load_single_file tidak perlu clear_marks lagi karena sudah dibersihkan di atas
-        self.load_single_file(first_video_path, clear_segments=False) 
-        
+        # 6. Atur durasi total DAN batas segmen di timeline SEKARANG
+        self.timeline.set_duration(self.current_segment_total_frames) 
         self.timeline.set_segments(segment_boundaries, self.current_segment_total_frames)
+        # --- AKHIR PERBAIKAN ---
+
+        # 7. Muat file pertama (load_single_file versi baru TIDAK akan memuat marka/durasi timeline)
+        first_video_path = self.segment_map[0]['path']
+        self.load_single_file(first_video_path, clear_segments=False) 
+        # (Sinyal frameIndexChanged(0, ...) dari sini akan memanggil update_frame_counter
+        # yang kemudian akan memanggil self.timeline.set_position(0))
+        
+        # 8. Update UI lainnya
         self.status_bar.showMessage(f"Loaded folder '{folder_item.text(0)}' ({len(self.segment_map)} items)", 3000)
         self.set_playback_mode(PlaybackMode.PLAY_NEXT)
         self.update_playlist_item_indicator()
@@ -2010,30 +2099,99 @@ class MainWindow(QMainWindow):
             }
         return self.media_data_cache[file_path]
 
+    def _rebuild_global_marks_from_segments(self):
+        """
+        Membangun ulang daftar marka global (self.marks, self.annotation_marks)
+        dengan membaca cache dari semua segmen. HANYA dipanggil saat
+        dalam mode segmen.
+        """
+        if not self.segment_map:
+            # Jika tidak ada segmen, pastikan marka aktif kosong
+            self.marks.clear()
+            self.annotation_marks.clear()
+            # Perbarui UI timeline
+            self.timeline.set_marks(self.marks)
+            self.timeline.set_annotation_marks(self.annotation_marks)
+            return
+
+        all_global_marks = []
+        all_global_annotation_marks = set()
+
+        for segment in self.segment_map:
+            path = segment['path']
+            start_frame = segment['start_frame']
+            # Dapatkan data dari cache (jangan buat jika tidak ada,
+            # meskipun _get_or_create seharusnya aman)
+            data = self.media_data_cache.get(path, {"marks": [], "annotation_marks": set()})
+
+            # Konversi marka lokal di cache ke global
+            for local_mark in data["marks"]:
+                all_global_marks.append(start_frame + local_mark)
+            for local_ann_mark in data["annotation_marks"]:
+                all_global_annotation_marks.add(start_frame + local_ann_mark)
+
+        # Perbarui state aktif dengan marka gabungan
+        # Gunakan set() untuk menghapus duplikat potensial
+        self.marks = sorted(list(set(all_global_marks)))
+        self.annotation_marks = all_global_annotation_marks
+
+        # Perbarui UI timeline
+        self.timeline.set_marks(self.marks)
+        self.timeline.set_annotation_marks(self.annotation_marks)
+
     def _save_current_media_data(self):
         """Menyimpan marka/anotasi aktif ke cache."""
         current_path = self.media_player.get_current_file_path()
         if current_path:
             # Dapatkan data untuk path saat ini (atau buat)
             data = self._get_or_create_media_data(current_path) 
-            # Simpan state aktif saat ini ke cache
-            data["marks"] = self.marks
-            data["annotation_marks"] = self.annotation_marks
-            data["annotations"] = self.media_player.annotations
+            
+            # --- PERBAIKAN: Hanya simpan marka jika TIDAK di mode segmen ---
+            if not self.segment_map:
+                # Mode Single atau Compare: Simpan state aktif saat ini ke cache
+                data["marks"] = list(self.marks) # Simpan salinan
+                data["annotation_marks"] = set(self.annotation_marks) # Simpan salinan
+            # --- AKHIR PERBAIKAN ---
+                
+            # Selalu simpan anotasi (gambar) karena itu lokal untuk player
+            data["annotations"] = dict(self.media_player.annotations) # Simpan salinan
             
     def _load_media_data(self, file_path):
-        """Memuat data dari cache ke state aktif."""
+        """
+        Memuat data dari cache ke state aktif player (anotasi).
+        HANYA update timeline jika TIDAK dalam mode segmen.
+        """
         # Dapatkan data dari cache (atau buat jika ini file baru)
         data = self._get_or_create_media_data(file_path)
-        
-        # Terapkan data dari cache ke state aktif
-        self.marks = data["marks"]
-        self.annotation_marks = data["annotation_marks"]
-        self.media_player.annotations = data["annotations"]
-        
-        # Terapkan state aktif ke UI (Timeline)
-        self.timeline.set_marks(self.marks)
-        self.timeline.set_annotation_marks(self.annotation_marks)        
+
+        # --- PERBAIKAN: Hapus pembaruan state marka global di sini ---
+        # # Terapkan data dari cache ke state aktif
+        # self.marks = data["marks"]
+        # self.annotation_marks = data["annotation_marks"]
+        # --- AKHIR PERBAIKAN ---
+
+        # Terapkan anotasi (gambar) ke player
+        self.media_player.annotations = dict(data["annotations"]) 
+
+        # --- PERBAIKAN: Update timeline HANYA jika TIDAK dalam mode segmen ---
+        if not self.segment_map:
+            # Mode Single atau Compare: Update timeline secara lengkap
+            new_duration = self.media_player.total_frames if self.media_player.has_media() else 0
+            new_fps = self.media_player.fps if self.media_player.has_media() else 0.0
+            new_position = self.media_player.current_frame_index if self.media_player.has_media() else 0 
+            new_position = max(0, new_position) 
+
+            # Muat marka LOKAL dari cache ke state global KARENA kita di mode single/compare
+            self.marks = data["marks"]
+            self.annotation_marks = data["annotation_marks"]
+
+            # Set SEMUA properti timeline
+            self.timeline.set_duration(new_duration) 
+            self.timeline.set_fps(new_fps) 
+            self.timeline.set_marks(self.marks)
+            self.timeline.set_annotation_marks(self.annotation_marks)
+            self.timeline.set_position(new_position) 
+            self.timeline.update() # Paksa repaint
             
     def _load_media_data_for_compare(self, file1=None, file2=None):
         """Memuat dan MENGGABUNGKAN data untuk compare mode."""
