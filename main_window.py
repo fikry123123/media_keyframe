@@ -10,13 +10,13 @@ import glob
 import json
 import cv2
 import numpy as np
-import re # <-- PASTIKAN IMPORT INI ADA DI ATAS FILE
+import re 
 from enum import Enum, auto
 from PyQt5.QtWidgets import (QMainWindow, QVBoxLayout, QWidget, QMenuBar, QAction, QMenu,
                             QFileDialog, QHBoxLayout, QStatusBar, QLabel, QSplitter,
                             QTreeWidget, QTreeWidgetItem, QPushButton, QShortcut,
                             QTreeWidgetItemIterator, QAbstractItemView, QMessageBox,
-                            QColorDialog) # Impor QColorDialog
+                            QColorDialog, QActionGroup) 
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QMimeData
 from PyQt5.QtGui import QDragEnterEvent, QDropEvent, QKeySequence, QPixmap, QDrag, QColor
 from media_player import MediaPlayer
@@ -221,8 +221,8 @@ class MainWindow(QMainWindow):
             QTreeWidget::branch:!has-children:!has-siblings:adjoins-item { border-image: url(none.png); }
         """)
         self.image_sequence_files, self.marks, self.splitter_sizes = [], [], []
-        
-        self.annotation_marks = set() 
+
+        self.annotation_marks = set()
         self.media_data_cache = {}
         self.current_sequence_index = 0
         self.compare_mode = False
@@ -239,31 +239,37 @@ class MainWindow(QMainWindow):
         self.last_playlist_path = None
         self.media_info_cache = {}
         self.active_panel_for_duration = None
-        
+
         self.is_mark_tour_active = False
         self.current_mark_tour_index = 0
-        self.mark_tour_speed_ms = 1500 
+        self.mark_tour_speed_ms = 1500
         self.mark_tour_timer = QTimer(self)
         self.mark_tour_timer.setTimerType(Qt.PreciseTimer)
-        self.mark_tour_timer.setSingleShot(True) 
-        
+        self.mark_tour_timer.setSingleShot(True)
+
+        # --- Inisialisasi speed_actions dan speed_action_group ---
+        self.speed_action_group = QActionGroup(self)
+        self.speed_actions = {}
+        self.speed_action_group.setExclusive(True)
+        # --- Akhir Inisialisasi ---
+
         self.current_draw_color = QColor(255, 0, 0, 255) # Default Merah
+        self.pen_size = 5
+        self.eraser_size = 20
 
         # --- LOGIKA SEGMEN BARU ---
         # Peta segmen: list of dicts
         # [{'item': item, 'path': str, 'start_frame': int, 'duration': int}]
         self.segment_map = []
         self.current_segment_total_frames = 0
-        self.current_segment_folder_item = None 
-        self.pen_size = 5
-        self.eraser_size = 20
+        self.current_segment_folder_item = None
         # --- AKHIR LOGIKA SEGMEN ---
 
         self.setup_ui()
         self.set_playback_mode(PlaybackMode.LOOP)
-        self.active_panel_for_duration = self.source_item 
+        self.active_panel_for_duration = self.source_item
         self.update_total_duration()
-        
+
         self.drawing_toolbar.set_draw_color_indicator(self.current_draw_color)
 
     def setup_ui(self):
@@ -372,26 +378,11 @@ class MainWindow(QMainWindow):
         # --- AKHIR KONEKSI ---
 
     def setup_shortcuts(self):
-        QShortcut(QKeySequence(Qt.Key_Space), self).activated.connect(self.toggle_play)
+        # HANYA shortcut dasar navigasi frame yang tidak ada di menu
         QShortcut(QKeySequence(Qt.Key_Left), self).activated.connect(self.previous_frame)
         QShortcut(QKeySequence(Qt.Key_Right), self).activated.connect(self.next_frame)
         QShortcut(QKeySequence(Qt.Key_Home), self).activated.connect(self.go_to_first_frame)
         QShortcut(QKeySequence(Qt.Key_End), self).activated.connect(self.go_to_last_frame)
-        QShortcut(QKeySequence("Ctrl+Up"), self).activated.connect(self.play_previous_timeline_item)
-        QShortcut(QKeySequence("Ctrl+Down"), self).activated.connect(self.play_next_timeline_item)
-        QShortcut(QKeySequence(Qt.Key_F), self).activated.connect(self.toggle_mark_at_current_frame)
-        QShortcut(QKeySequence("Ctrl+Shift+M"), self).activated.connect(self._shortcut_clear_all_marks)        
-        QShortcut(QKeySequence(Qt.Key_BracketRight), self).activated.connect(self.jump_to_next_mark)
-        QShortcut(QKeySequence(Qt.Key_BracketLeft), self).activated.connect(self.jump_to_previous_mark)
-        QShortcut(QKeySequence(Qt.Key_L), self).activated.connect(self.toggle_marked_range_loop)
-        QShortcut(QKeySequence("Shift+]"), self).activated.connect(self.jump_and_play_next_mark)
-        QShortcut(QKeySequence("Shift+["), self).activated.connect(self.jump_and_play_previous_mark)
-        QShortcut(QKeySequence("Ctrl+Shift+P"), self).activated.connect(self.toggle_mark_tour)
-        
-        # --- TAMBAHAN SHORTCUT BARU ---
-        QShortcut(QKeySequence("Ctrl+Right"), self).activated.connect(self.jump_to_next_segment)
-        QShortcut(QKeySequence("Ctrl+Left"), self).activated.connect(self.jump_to_previous_segment)
-        # --- AKHIR TAMBAHAN ---
 
     def _resolve_sequences_and_files(self, file_paths):
         image_extensions = ['.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.exr', '.dpx']
@@ -628,7 +619,10 @@ class MainWindow(QMainWindow):
 
     def create_menu_bar(self):
         menubar = self.menuBar()
+
+        # --- File Menu (Tetap Sama) ---
         file_menu = menubar.addMenu('File')
+        # ... (Kode File Menu tidak berubah) ...
         open_action = QAction('Open File', self)
         open_action.setShortcut('Ctrl+O')
         open_action.triggered.connect(self.open_file)
@@ -649,20 +643,253 @@ class MainWindow(QMainWindow):
         clear_action = QAction('Clear Project', self)
         clear_action.triggered.connect(self.clear_project_tree)
         file_menu.addAction(clear_action)
+
+
+        # --- View Menu (Diperluas) ---
         view_menu = menubar.addMenu('View')
         self.compare_action = QAction('Compare Mode', self)
         self.compare_action.setCheckable(True)
         self.compare_action.setShortcut('Ctrl+T')
         self.compare_action.triggered.connect(lambda: self.toggle_compare_mode(self.compare_action.isChecked()))
         view_menu.addAction(self.compare_action)
+        
         self.hide_playlist_action = QAction("Hide Project Panel", self)
         self.hide_playlist_action.setShortcut('Ctrl+H')
         self.hide_playlist_action.triggered.connect(self.toggle_playlist_panel)
         view_menu.addAction(self.hide_playlist_action)
+        
         view_menu.addSeparator()
-        show_shortcuts_action = QAction("View Shortcuts...", self)
-        show_shortcuts_action.triggered.connect(self.show_shortcuts_dialog)
-        view_menu.addAction(show_shortcuts_action)
+
+        # Sub-menu Zoom (Tetap Sama)
+        zoom_menu = view_menu.addMenu("Zoom")
+        # ... (Kode Zoom Menu tidak berubah) ...
+        zoom_in_action = QAction("Zoom In", self)
+        zoom_in_action.setShortcut(QKeySequence(Qt.Key_Equal)) # Shortcut utama '='
+        zoom_in_action.setShortcuts([QKeySequence(Qt.Key_Equal), QKeySequence(Qt.Key_Plus)]) # Tambah '+'
+        zoom_in_action.triggered.connect(self._shortcut_zoom_in)
+        zoom_menu.addAction(zoom_in_action)
+        zoom_out_action = QAction("Zoom Out", self)
+        zoom_out_action.setShortcut(QKeySequence(Qt.Key_Minus))
+        zoom_out_action.triggered.connect(self._shortcut_zoom_out)
+        zoom_menu.addAction(zoom_out_action)
+        reset_zoom_action = QAction("Reset Zoom (100%)", self)
+        reset_zoom_action.setShortcut("Ctrl+0")
+        reset_zoom_action.triggered.connect(self._shortcut_reset_zoom)
+        zoom_menu.addAction(reset_zoom_action)
+
+        # Sub-menu Drawing (Tetap Sama)
+        draw_menu = view_menu.addMenu("Drawing")
+        # ... (Kode Drawing Menu tidak berubah) ...
+        toggle_draw_action = QAction("Toggle Pen", self)
+        toggle_draw_action.setShortcut("D")
+        toggle_draw_action.triggered.connect(self._shortcut_toggle_draw)
+        draw_menu.addAction(toggle_draw_action)
+        toggle_erase_action = QAction("Toggle Eraser", self)
+        toggle_erase_action.setShortcut("E")
+        toggle_erase_action.triggered.connect(self._shortcut_toggle_erase)
+        draw_menu.addAction(toggle_erase_action)
+        draw_menu.addSeparator()
+        increase_size_action = QAction("Increase Size", self)
+        increase_size_action.setShortcut("Ctrl+=")
+        increase_size_action.setShortcuts([QKeySequence("Ctrl+="), QKeySequence("Ctrl++")]) # Tambah Ctrl++
+        increase_size_action.triggered.connect(self._shortcut_increase_size)
+        draw_menu.addAction(increase_size_action)
+        decrease_size_action = QAction("Decrease Size", self)
+        decrease_size_action.setShortcut("Ctrl+-")
+        decrease_size_action.triggered.connect(self._shortcut_decrease_size)
+        draw_menu.addAction(decrease_size_action)
+        pick_color_action = QAction("Pick Color", self)
+        pick_color_action.setShortcut("C")
+        pick_color_action.triggered.connect(self.drawing_toolbar.color_button.click)
+        draw_menu.addAction(pick_color_action)
+        draw_menu.addSeparator()
+        clear_frame_action = QAction("Clear Frame Drawing", self)
+        clear_frame_action.setShortcut("Ctrl+Backspace")
+        clear_frame_action.triggered.connect(self.clear_current_frame_drawing)
+        draw_menu.addAction(clear_frame_action)
+        
+        # --- SUBMENU BARU: Timeline & Marks (DILENGKAPI) ---
+        view_menu.addSeparator()
+        
+        timeline_marks_menu = view_menu.addMenu("Timeline & Marks")
+
+        # -- Grup Playback/Frame Navigation --
+        play_pause_action = QAction("Play / Pause", self)
+        play_pause_action.setShortcut("Space")
+        play_pause_action.triggered.connect(self.toggle_play)
+        timeline_marks_menu.addAction(play_pause_action)
+
+        next_frame_action = QAction("Next Frame", self)
+        next_frame_action.setShortcut(QKeySequence(Qt.Key_Right))
+        next_frame_action.triggered.connect(self.next_frame)
+        timeline_marks_menu.addAction(next_frame_action)
+
+        prev_frame_action = QAction("Previous Frame", self)
+        prev_frame_action.setShortcut(QKeySequence(Qt.Key_Left))
+        prev_frame_action.triggered.connect(self.previous_frame)
+        timeline_marks_menu.addAction(prev_frame_action)
+
+        first_frame_action = QAction("Go to First Frame", self)
+        first_frame_action.setShortcut("Home")
+        first_frame_action.triggered.connect(self.go_to_first_frame)
+        timeline_marks_menu.addAction(first_frame_action)
+
+        last_frame_action = QAction("Go to Last Frame", self)
+        last_frame_action.setShortcut("End")
+        last_frame_action.triggered.connect(self.go_to_last_frame)
+        timeline_marks_menu.addAction(last_frame_action)
+
+        timeline_marks_menu.addSeparator()
+
+        # -- Grup Navigasi Timeline/Segmen --
+        next_item_action = QAction("Play Next Timeline Item", self)
+        next_item_action.setShortcut("Ctrl+Down")
+        next_item_action.triggered.connect(self.play_next_timeline_item)
+        timeline_marks_menu.addAction(next_item_action)
+        
+        prev_item_action = QAction("Play Previous Timeline Item", self)
+        prev_item_action.setShortcut("Ctrl+Up")
+        prev_item_action.triggered.connect(self.play_previous_timeline_item)
+        timeline_marks_menu.addAction(prev_item_action)
+
+        next_segment_action = QAction("Jump to Next Segment", self)
+        next_segment_action.setShortcut("Ctrl+Right")
+        next_segment_action.triggered.connect(self.jump_to_next_segment)
+        timeline_marks_menu.addAction(next_segment_action)
+
+        prev_segment_action = QAction("Jump to Previous Segment", self)
+        prev_segment_action.setShortcut("Ctrl+Left")
+        prev_segment_action.triggered.connect(self.jump_to_previous_segment)
+        timeline_marks_menu.addAction(prev_segment_action)
+        
+        timeline_marks_menu.addSeparator()
+
+        # -- Grup Marking --
+        toggle_f_mark_action = QAction("Toggle Mark", self)
+        toggle_f_mark_action.setShortcut("F")
+        toggle_f_mark_action.triggered.connect(self.toggle_mark_at_current_frame)
+        timeline_marks_menu.addAction(toggle_f_mark_action)
+
+        jump_next_mark_action = QAction("Jump to Next Mark", self)
+        jump_next_mark_action.setShortcut("]")
+        jump_next_mark_action.triggered.connect(self.jump_to_next_mark)
+        timeline_marks_menu.addAction(jump_next_mark_action)
+
+        jump_prev_mark_action = QAction("Jump to Previous Mark", self)
+        jump_prev_mark_action.setShortcut("[")
+        jump_prev_mark_action.triggered.connect(self.jump_to_previous_mark)
+        timeline_marks_menu.addAction(jump_prev_mark_action)
+
+        # Aksi Jump and Play Next Mark BARU
+        jump_play_next_action = QAction("Jump and Play to Next Mark", self)
+        jump_play_next_action.setShortcut("Shift+]")
+        jump_play_next_action.triggered.connect(self.jump_and_play_next_mark)
+        timeline_marks_menu.addAction(jump_play_next_action)
+
+        # Aksi Jump and Play Previous Mark BARU
+        jump_play_prev_action = QAction("Jump and Play to Previous Mark", self)
+        jump_play_prev_action.setShortcut("Shift+[")
+        jump_play_prev_action.triggered.connect(self.jump_and_play_previous_mark)
+        timeline_marks_menu.addAction(jump_play_prev_action)
+
+        loop_range_action = QAction("Toggle Loop Range", self)
+        loop_range_action.setShortcut("L")
+        loop_range_action.triggered.connect(self.toggle_marked_range_loop)
+        timeline_marks_menu.addAction(loop_range_action)
+        
+        mark_tour_action = QAction("Toggle Mark Tour", self)
+        mark_tour_action.setShortcut("Ctrl+Shift+P")
+        mark_tour_action.triggered.connect(self.toggle_mark_tour)
+        timeline_marks_menu.addAction(mark_tour_action)
+
+        clear_marks_action = QAction("Clear All Marks (Current Video)", self)
+        clear_marks_action.setShortcut("Ctrl+Shift+M")
+        clear_marks_action.triggered.connect(self._shortcut_clear_all_marks)
+        timeline_marks_menu.addAction(clear_marks_action)
+        
+        timeline_marks_menu.addSeparator()
+
+        # Replikasi Menu Mark Tour Speed (Tetap Sama)
+        speed_menu = timeline_marks_menu.addMenu("Mark Tour Speed")
+        # ... (Kode menu speed tidak berubah) ...
+        speeds = {
+            "Slowest (3s)": 3000, "Slow (2s)": 2000, "Normal (1.5s)": 1500,
+            "Fast (1s)": 1000, "Faster (0.5s)": 500, "Very Fast (0.25s)": 250,
+            "Super Fast (0.1s)": 100, "Hyper (0.05s)": 50, "Max (~60fps)": 16
+        }
+        self.speed_actions.clear() 
+        for text, speed_ms in speeds.items():
+            action = QAction(text, self)
+            action.setCheckable(True)
+            action.setData(speed_ms)
+            action.triggered.connect(lambda checked, s=speed_ms: self.set_mark_tour_speed(s))
+            if self.mark_tour_speed_ms == speed_ms:
+                action.setChecked(True)
+            speed_menu.addAction(action)
+            self.speed_action_group.addAction(action) 
+            self.speed_actions[speed_ms] = action 
+        
+        view_menu.addSeparator()        
+    # --- HANDLER SHORTCUT BARU ---
+
+    def _shortcut_zoom_in(self):
+        self.media_player.zoom_at_center(1.25)
+        if self.compare_mode:
+            self.media_player_2.zoom_at_center(1.25)
+
+    def _shortcut_zoom_out(self):
+        self.media_player.zoom_at_center(0.8)
+        if self.compare_mode:
+            self.media_player_2.zoom_at_center(0.8)
+
+    def _shortcut_reset_zoom(self):
+        self.media_player.reset_zoom_pan()
+        if self.compare_mode:
+            self.media_player_2.reset_zoom_pan()
+
+    def _shortcut_toggle_draw(self):
+        self.drawing_toolbar.toggle_pen_mode()
+
+    def _shortcut_toggle_erase(self):
+        self.drawing_toolbar.toggle_erase_mode()
+
+    def _shortcut_increase_size(self):
+        """Menaikkan ukuran alat via shortcut (meniru wheelEvent)."""
+        # Hanya berfungsi jika panel alat terlihat
+        if not self.drawing_toolbar.tools_container.isVisible():
+            return
+
+        tb = self.drawing_toolbar
+        new_size = tb.current_val
+
+        if tb.pen_button.isChecked():
+            step = 2 # Langkah ukuran pena
+            new_size = max(tb.current_min, min(tb.current_val + step, tb.current_max))
+        elif tb.erase_button.isChecked():
+            step = 5 # Langkah ukuran penghapus
+            new_size = max(tb.current_min, min(tb.current_val + step, tb.current_max))
+
+        if new_size != tb.current_val:
+            tb.sizeChanged.emit(new_size) # Kirim sinyal seolah-olah slider digerakkan
+
+    def _shortcut_decrease_size(self):
+        """Menurunkan ukuran alat via shortcut (meniru wheelEvent)."""
+        if not self.drawing_toolbar.tools_container.isVisible():
+            return
+
+        tb = self.drawing_toolbar
+        new_size = tb.current_val
+
+        if tb.pen_button.isChecked():
+            step = 2
+            new_size = max(tb.current_min, min(tb.current_val - step, tb.current_max))
+        elif tb.erase_button.isChecked():
+            step = 5
+            new_size = max(tb.current_min, min(tb.current_val - step, tb.current_max))
+
+        if new_size != tb.current_val:
+            tb.sizeChanged.emit(new_size)
+    # --- AKHIR HANDLER ---    
         
     def create_status_bar(self):
         self.status_bar = QStatusBar()

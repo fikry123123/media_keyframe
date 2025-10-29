@@ -582,6 +582,63 @@ class MediaPlayer(QWidget):
         # 8. Tampilkan pixmap gabungan
         self.video_label.setPixmap(canvas_pixmap)
         
+    def reset_zoom_pan(self):
+        """Mereset zoom dan pan ke default (fit to view)."""
+        self.zoom_factor = 1.0
+        self.pan_offset = QPoint(0, 0)
+        if self.displayed_frame_source is not None:
+            self.display_frame(self.displayed_frame_source)
+
+    def zoom_at_center(self, factor):
+        """Melakukan zoom di tengah layar (bukan ke kursor)."""
+        if not self.has_media() or self.frame_dims is None:
+            return
+
+        old_zoom = self.zoom_factor
+        # Batasi zoom (100% - 2000%)
+        new_zoom = max(1.0, min(old_zoom * factor, 20.0))
+
+        if abs(new_zoom - old_zoom) < 0.001:
+            return # Tidak ada perubahan
+
+        self.zoom_factor = new_zoom
+
+        # Jika zoom kembali ke 1.0, reset pan
+        if self.zoom_factor <= 1.001:
+            self.pan_offset = QPoint(0, 0)
+        else:
+            # Sesuaikan pan offset agar tetap terlihat di tengah
+            scale_ratio = new_zoom / old_zoom
+            new_pan_x = self.pan_offset.x() * scale_ratio
+            new_pan_y = self.pan_offset.y() * scale_ratio
+
+            # Kita masih perlu membatasi pan agar tidak keluar layar
+            h, w, ch = self.frame_dims
+            widget_size = self.size()
+
+            scale_w = widget_size.width() / w if w > 0 else 0
+            scale_h = widget_size.height() / h if h > 0 else 0
+            base_scale = min(scale_w, scale_h) if min(scale_w, scale_h) > 0 else 1.0
+
+            total_scale = base_scale * self.zoom_factor
+            scaled_w = int(w * total_scale)
+            scaled_h = int(h * total_scale)
+
+            center_x = (widget_size.width() - scaled_w) // 2
+            center_y = (widget_size.height() - scaled_h) // 2
+
+            max_pan_x = -center_x
+            min_pan_x = widget_size.width() - scaled_w - center_x
+            max_pan_y = -center_y
+            min_pan_y = widget_size.height() - scaled_h - center_y
+
+            final_pan_x = max(min_pan_x, min(int(new_pan_x), max_pan_x))
+            final_pan_y = max(min_pan_y, min(int(new_pan_y), max_pan_y))
+            self.pan_offset = QPoint(final_pan_x, final_pan_y)
+
+        if self.displayed_frame_source is not None:
+            self.display_frame(self.displayed_frame_source)    
+        
     def resizeEvent(self, event):
         super().resizeEvent(event)
         # Tampilkan ulang frame saat ini dengan ukuran baru

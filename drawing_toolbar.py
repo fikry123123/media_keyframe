@@ -319,3 +319,41 @@ class DrawingToolbar(QWidget):
             self.sizeChanged.emit(new_size)
             
         event.accept()
+        
+    def toggle_pen_mode(self):
+        """Mengaktifkan/Menonaktifkan mode Pena dari shortcut."""
+        # Jika master off, nyalakan dan pilih pena
+        if not self.master_toggle_button.isChecked():
+            self.master_toggle_button.setChecked(True)
+            # Pastikan erase dimatikan sebelum menyalakan pen
+            if self.erase_button.isChecked():
+                self.erase_button.setChecked(False)
+            self.pen_button.setChecked(True)
+        # Jika master on, tapi pena off, pilih pena
+        elif not self.pen_button.isChecked():
+            # Pastikan erase dimatikan sebelum menyalakan pen
+            if self.erase_button.isChecked():
+                self.erase_button.setChecked(False)
+            self.pen_button.setChecked(True)
+        # Jika master on dan pena on, matikan master
+        else:
+            self.master_toggle_button.setChecked(False)
+
+    def toggle_erase_mode(self):
+        """Mengaktifkan/Menonaktifkan mode Hapus dari shortcut."""
+        # Jika master off, nyalakan dan pilih hapus
+        if not self.master_toggle_button.isChecked():
+            self.master_toggle_button.setChecked(True)
+            # Pastikan pen dimatikan sebelum menyalakan erase
+            if self.pen_button.isChecked():
+                self.pen_button.setChecked(False)
+            self.erase_button.setChecked(True)
+        # Jika master on, tapi hapus off, pilih hapus
+        elif not self.erase_button.isChecked():
+            # Pastikan pen dimatikan sebelum menyalakan erase
+            if self.pen_button.isChecked():
+                self.pen_button.setChecked(False)
+            self.erase_button.setChecked(True)
+        # Jika master on dan hapus on, matikan master
+        else:
+            self.master_toggle_button.setChecked(False)    
