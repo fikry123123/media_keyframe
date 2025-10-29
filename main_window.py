@@ -254,6 +254,8 @@ class MainWindow(QMainWindow):
         self.segment_map = []
         self.current_segment_total_frames = 0
         self.current_segment_folder_item = None 
+        self.pen_size = 5
+        self.eraser_size = 20
         # --- AKHIR LOGIKA SEGMEN ---
 
         self.setup_ui()
@@ -365,6 +367,7 @@ class MainWindow(QMainWindow):
         self.drawing_toolbar.eraseModeToggled.connect(self.handle_erase_toggle)
         self.drawing_toolbar.colorButtonClicked.connect(self.open_color_picker)
         self.drawing_toolbar.clearFrameDrawingClicked.connect(self.clear_current_frame_drawing)
+        self.drawing_toolbar.sizeChanged.connect(self.handle_size_change)
         # --- AKHIR KONEKSI ---
 
     def setup_shortcuts(self):
@@ -801,21 +804,33 @@ class MainWindow(QMainWindow):
     
     def set_draw_mode(self):
         """Mengaktifkan mode menggambar (pena) pada player A."""
+        # --- TAMBAHAN BARU ---
+        # Atur slider toolbar ke nilai dan jangkauan Pena
+        self.drawing_toolbar.set_size_range(1, 200) # Min 1, Max 200
+        self.drawing_toolbar.set_size_value(self.pen_size)
+        # --- AKHIR TAMBAHAN ---
+
         player = self.media_player 
         player.drawing_enabled = True
         player.draw_pen_color = self.current_draw_color
-        player.draw_pen_width = 5
-        self.status_bar.showMessage("Draw Mode ON (Pen)", 3000)
+        player.draw_pen_width = self.pen_size 
+        self.status_bar.showMessage(f"Draw Mode ON (Pen Size: {self.pen_size})", 3000)
         player.video_label.setCursor(Qt.CrossCursor)
 
     def set_erase_mode(self):
         """Mengaktifkan mode menghapus pada player A."""
+        # --- TAMBAHAN BARU ---
+        # Atur slider toolbar ke nilai dan jangkauan Penghapus
+        self.drawing_toolbar.set_size_range(5, 500) # Min 5, Max 500
+        self.drawing_toolbar.set_size_value(self.eraser_size)
+        # --- AKHIR TAMBAHAN ---
+        
         player = self.media_player 
         player.drawing_enabled = True
         player.draw_pen_color = QColor(0, 0, 0, 0) 
-        player.draw_pen_width = 20 
-        self.status_bar.showMessage("Erase Mode ON", 3000)
-        player.video_label.setCursor(Qt.CrossCursor) 
+        player.draw_pen_width = self.eraser_size 
+        self.status_bar.showMessage(f"Erase Mode ON (Size: {self.eraser_size})", 3000)
+        player.video_label.setCursor(Qt.CrossCursor)
 
     def set_drawing_off(self):
         """Menonaktifkan semua mode menggambar/menghapus."""
@@ -830,6 +845,21 @@ class MainWindow(QMainWindow):
         self.drawing_toolbar.force_close()
         # --- AKHIR PERBAIKAN ---
         
+    # (Letakkan ini di dekat set_draw_mode, set_erase_mode, dll.)
+
+    def handle_size_change(self, value):
+        """
+        Slot untuk sinyal 'sizeChanged' dari toolbar.
+        Dipanggil saat pengguna menggeser slider.
+        """
+        # Cek alat mana yang aktif (dilihat dari state tombol di toolbar)
+        if self.drawing_toolbar.pen_button.isChecked():
+            self.pen_size = value
+            self.set_draw_mode() # Terapkan lagi (akan update status bar)
+        elif self.drawing_toolbar.erase_button.isChecked():
+            self.eraser_size = value
+            self.set_erase_mode()
+
     def add_annotation_mark(self, frame_index):
         """Slot untuk menerima sinyal 'annotationAdded' dari MediaPlayer."""
         
