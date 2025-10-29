@@ -1104,7 +1104,10 @@ class MainWindow(QMainWindow):
                 if current_index != -1 and (current_index + 1) < len(self.segment_map):
                     # Play segmen berikutnya
                     next_segment = self.segment_map[current_index + 1]
-                    self.load_single_file(next_segment['path'], clear_marks=False, clear_segments=False)
+                    
+                    # --- PERBAIKAN: Hapus argumen 'clear_marks' ---
+                    self.load_single_file(next_segment['path'], clear_segments=False)
+                    
                     QTimer.singleShot(100, self.media_player.toggle_play)
                 else:
                     # Segmen terakhir selesai, berhenti.
@@ -1451,7 +1454,6 @@ class MainWindow(QMainWindow):
             target_segment = None
             # Cari segmen mana yang berisi 'position' (frame global)
             for segment in self.segment_map:
-                # Cek jika frame berada di dalam jangkauan [start, start + duration)
                 seg_end_frame = segment['start_frame'] + segment['duration']
                 if position >= segment['start_frame'] and position < seg_end_frame:
                     target_segment = segment
@@ -1471,8 +1473,8 @@ class MainWindow(QMainWindow):
             # Cek apakah kita perlu memuat file baru
             current_path = self.media_player.get_current_file_path()
             if target_segment['path'] != current_path:
-                # Muat file baru *tanpa* menghapus mark/segmen
-                self.load_single_file(target_segment['path'], clear_marks=False, clear_segments=False)
+                # --- PERBAIKAN: Hapus argumen 'clear_marks' ---
+                self.load_single_file(target_segment['path'], clear_segments=False)
             
             # Seek ke frame lokal
             self.media_player.seek_to_position(local_frame)
@@ -1888,7 +1890,6 @@ class MainWindow(QMainWindow):
                 # Ini adalah sub-folder, cari di dalamnya
                 self._collect_videos_recursive(child, video_list)
 
-    # --- FUNGSI BARU UNTUK MEMUAT SEGMEN ---
     def load_folder_segments(self, folder_item):
         """Memuat semua video dalam folder sebagai segmen virtual."""
         if self.compare_mode:
@@ -1897,7 +1898,8 @@ class MainWindow(QMainWindow):
         # 1. Simpan data file sebelumnya (jika ada)
         self._save_current_media_data()
         
-        # 2. Bersihkan state aktif (self.marks, dll.)
+        # 2. Bersihkan state aktif SEKARANG (self.marks, dll.)
+        # Ini akan membersihkan tampilan timeline sebelum kita coba muat
         self.clear_all_marks(clear_segments=True) 
             
         self.current_segment_folder_item = folder_item 
@@ -1907,22 +1909,47 @@ class MainWindow(QMainWindow):
         video_items = []
         self._collect_videos_recursive(folder_item, video_items)
         
+        # --- PERBAIKAN BAGIAN 1: Handle folder kosong ---
         if not video_items:
-            # ... (sisa kode error)
+            self.status_bar.showMessage(f"Folder '{folder_item.text(0)}' contains no playable media.", 3000)
+            # Pastikan player dan UI benar-benar bersih
+            self.media_player.clear_media() 
+            self.update_frame_counter(-1, 0) # Reset timeline UI
+            self.update_total_duration(self.timeline_item) # Update label durasi total
+            self.update_playlist_item_indicator() # Hapus indikator (A)
             return
+        # --- AKHIR PERBAIKAN 1 ---
 
         # Bangun peta segmen
         for item in video_items:
-            # ... (sisa kode bangun peta)
+            path = item.data(0, Qt.UserRole)
+            duration, frame_count = self.get_media_info(path)
+            
+            if frame_count > 0:
+                self.segment_map.append({
+                    'item': item, 
+                    'path': path, 
+                    'start_frame': self.current_segment_total_frames, 
+                    'duration': frame_count
+                })
+                self.current_segment_total_frames += frame_count
         
-            if not self.segment_map:
+        # --- PERBAIKAN BAGIAN 2: Handle jika tidak ada media yg bisa dibaca ---
+        if not self.segment_map:
              self.status_bar.showMessage(f"Could not read media in '{folder_item.text(0)}'.", 3000)
+             # Pastikan player dan UI benar-benar bersih
+             self.media_player.clear_media() 
+             self.update_frame_counter(-1, 0) # Reset timeline UI
+             self.update_total_duration(self.timeline_item) # Update label durasi total
+             self.update_playlist_item_indicator() # Hapus indikator (A)
              return
+        # --- AKHIR PERBAIKAN 2 ---
 
         segment_boundaries = [s['start_frame'] for s in self.segment_map]
         
         # Muat file pertama (INI AKAN MEMUAT MARKANYA JIKA ADA)
         first_video_path = self.segment_map[0]['path']
+        # load_single_file tidak perlu clear_marks lagi karena sudah dibersihkan di atas
         self.load_single_file(first_video_path, clear_segments=False) 
         
         self.timeline.set_segments(segment_boundaries, self.current_segment_total_frames)
