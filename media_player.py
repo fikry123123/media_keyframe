@@ -531,7 +531,7 @@ class MediaPlayer(QWidget):
         qt_image = QImage(rgb_frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
         pixmap = QPixmap.fromImage(qt_image) # <-- pixmap asli (full size)
         
-        # --- AWAL PERUBAHAN: LOGIKA ZOOM/PAN ---
+        # --- AWAL PERBAIKAN: LOGIKA SCALING QPAINTER ---
         
         # 1. Hitung skala dasar (fit)
         scale_w = widget_size.width() / w if w > 0 else 0
@@ -544,53 +544,43 @@ class MediaPlayer(QWidget):
         scaled_w = int(w * total_scale)
         scaled_h = int(h * total_scale)
         
-        # 3. Buat pixmap yang sudah diskalakan (dari pixmap asli)
-        if scaled_w <= 0 or scaled_h <= 0:
-            scaled_pixmap = QPixmap(1, 1)
-            scaled_pixmap.fill(Qt.transparent)
-        else:
-            scaled_pixmap = pixmap.scaled(scaled_w, scaled_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        
-        # 4. Buat canvas seukuran widget
+        # 3. Buat canvas seukuran widget
         canvas_pixmap = QPixmap(widget_size)
         canvas_pixmap.fill(QColor("#1a1a1a")) # Latar belakang player
 
-        # 5. Hitung offset gambar (tengah + pan)
+        # 4. Hitung offset gambar (tengah + pan)
         draw_x = (widget_size.width() - scaled_w) // 2 + self.pan_offset.x()
         draw_y = (widget_size.height() - scaled_h) // 2 + self.pan_offset.y()
         
-        # 6. Gambar pixmap video ke canvas
+        # 5. Gambar pixmap video ke canvas MENGGUNAKAN QPAINTER
         painter = QPainter(canvas_pixmap)
-        painter.drawPixmap(draw_x, draw_y, scaled_pixmap)
+        
+        # Atur kualitas rendering untuk zoom (opsional, tapi bagus)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform)
+
+        if scaled_w > 0 and scaled_h > 0:
+            # Ini adalah overload drawPixmap(x, y, w, h, source_pixmap)
+            # Ini jauh lebih cepat daripada pixmap.scaled()
+            painter.drawPixmap(draw_x, draw_y, scaled_w, scaled_h, pixmap)
 
         # --- LOGIKA ANOTASI (DIPERBARUI) ---
-        # Periksa apakah ada anotasi untuk frame ini
         annotation_image = self.annotations.get(self.current_frame_index)
-        if annotation_image:
+        if annotation_image and scaled_w > 0 and scaled_h > 0:
             # Ubah QImage anotasi (seukuran frame) menjadi QPixmap
             annotation_pixmap = QPixmap.fromImage(annotation_image)
             
-            # Skalakan anotasi dengan FAKTOR SKALA YANG SAMA
-            if scaled_w <= 0 or scaled_h <= 0:
-                scaled_annotation = QPixmap(1, 1)
-                scaled_annotation.fill(Qt.transparent)
-            else:
-                scaled_annotation = annotation_pixmap.scaled(scaled_w, scaled_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            
-            # Gambar anotasi di atas video, DENGAN OFFSET YANG SAMA
-            painter.drawPixmap(draw_x, draw_y, scaled_annotation)
+            # Gambar anotasi di atas video, DENGAN CARA CEPAT YANG SAMA
+            painter.drawPixmap(draw_x, draw_y, scaled_w, scaled_h, annotation_pixmap)
         
         painter.end()
-        # --- AKHIR LOGIKA ANOTASI ---
+        # --- AKHIR PERBAIKAN ---
 
         # 7. Simpan info penskalaan & offset untuk pemetaan mouse
-        self.pixmap_size = scaled_pixmap.size() # Ini adalah QSize(scaled_w, scaled_h)
+        self.pixmap_size = QSize(scaled_w, scaled_h) # Gunakan ukuran yg dihitung
         self.pixmap_offset = QPoint(draw_x, draw_y) # Ini adalah offset top-left di widget
 
         # 8. Tampilkan pixmap gabungan
         self.video_label.setPixmap(canvas_pixmap)
-        
-        # --- AKHIR PERUBAHAN ---
         
     def resizeEvent(self, event):
         super().resizeEvent(event)
