@@ -222,7 +222,7 @@ class MainWindow(QMainWindow):
         self.image_sequence_files, self.marks, self.splitter_sizes = [], [], []
         
         self.annotation_marks = set() 
-        
+        self.media_data_cache = {}
         self.current_sequence_index = 0
         self.compare_mode = False
         self.playback_mode = PlaybackMode.LOOP
@@ -1732,8 +1732,9 @@ class MainWindow(QMainWindow):
             # --- Ini adalah FILE ---
             self.set_playback_mode(PlaybackMode.PLAY_ONCE)
             if self.compare_mode: self.toggle_compare_mode(False)
-            # Muat file dan HAPUS segmen sebelumnya
-            self.load_single_file(file_path, clear_marks=True, clear_segments=True)
+            
+            # Panggil load_single_file versi baru (tanpa clear_marks)
+            self.load_single_file(file_path, clear_segments=True)
         else:
             # --- Ini adalah FOLDER ---
             is_timeline_item = False
@@ -1771,78 +1772,120 @@ class MainWindow(QMainWindow):
         """Memuat semua video dalam folder sebagai segmen virtual."""
         if self.compare_mode:
             self.toggle_compare_mode(False)
+        
+        # 1. Simpan data file sebelumnya (jika ada)
+        self._save_current_media_data()
+        
+        # 2. Bersihkan state aktif (self.marks, dll.)
+        self.clear_all_marks(clear_segments=True) 
             
         self.current_segment_folder_item = folder_item 
-        
         self.segment_map.clear()
         self.current_segment_total_frames = 0
         
-        # --- PERBAIKAN: Dua baris ini hilang ---
-        video_items = [] 
+        video_items = []
         self._collect_videos_recursive(folder_item, video_items)
-        # --- AKHIR PERBAIKAN ---
         
         if not video_items:
-            self.status_bar.showMessage(f"Folder '{folder_item.text(0)}' contains no playable media.", 3000)
-            self.clear_all_marks(clear_segments=True)
-            self.media_player.clear_media()
-            self.update_frame_counter(-1, 0) # Reset timeline UI
+            # ... (sisa kode error)
             return
 
         # Bangun peta segmen
         for item in video_items:
-            path = item.data(0, Qt.UserRole)
-            duration, frame_count = self.get_media_info(path)
-            
-            if frame_count > 0:
-                self.segment_map.append({
-                    'item': item, 
-                    'path': path, 
-                    'start_frame': self.current_segment_total_frames, 
-                    'duration': frame_count
-                })
-                self.current_segment_total_frames += frame_count
+            # ... (sisa kode bangun peta)
         
-        if not self.segment_map:
+            if not self.segment_map:
              self.status_bar.showMessage(f"Could not read media in '{folder_item.text(0)}'.", 3000)
              return
 
-        # Dapatkan batas segmen (frame awal)
         segment_boundaries = [s['start_frame'] for s in self.segment_map]
         
-        # Muat file pertama *tanpa* menghapus marks, tapi HAPUS marks lama
+        # Muat file pertama (INI AKAN MEMUAT MARKANYA JIKA ADA)
         first_video_path = self.segment_map[0]['path']
-        self.load_single_file(first_video_path, clear_marks=True, clear_segments=False) 
+        self.load_single_file(first_video_path, clear_segments=False) 
         
-        # Terapkan data segmen global ke timeline
         self.timeline.set_segments(segment_boundaries, self.current_segment_total_frames)
-        # set_duration dan set_position akan dipanggil oleh load_single_file
-        # melalui sinyal media_player.frameIndexChanged -> self.update_frame_counter
-        
         self.status_bar.showMessage(f"Loaded folder '{folder_item.text(0)}' ({len(self.segment_map)} items)", 3000)
-        
-        # Set mode playback untuk lanjut otomatis
         self.set_playback_mode(PlaybackMode.PLAY_NEXT)
-        self.update_playlist_item_indicator() # Update indikator (A)
+        self.update_playlist_item_indicator()
             
-    def load_single_file(self, file_path, clear_marks=True, clear_segments=True):
+    def load_single_file(self, file_path, clear_segments=True):
         if self.compare_timer.isActive():
             self.compare_timer.stop()
             self.is_compare_playing = False
             
-        if clear_marks:
-            self.clear_all_marks(clear_segments=clear_segments) 
-        elif clear_segments:
-            # Hapus segmen tapi pertahankan marka
+        # 1. SIMPAN DATA LAMA (dari file sebelumnya)
+        self._save_current_media_data()
+            
+        # 2. HAPUS SEGMENT JIKA DIMINTA
+        if clear_segments:
             self.segment_map.clear()
             self.current_segment_total_frames = 0
             self.timeline.set_segments([], 0)
+            self.current_segment_folder_item = None 
             
-        if clear_segments:
-            self.current_segment_folder_item = None # <-- TAMBAHKAN INI
-
+        # 3. MUAT MEDIA BARU
+        # (Ini akan memanggil media_player.clear_media(), 
+        # yang mengosongkan self.media_player.annotations)
         success = self.media_player.load_media(file_path)
-        # ... (sisa fungsi tetap sama) ...
+        
+        # 4. TERAPKAN DATA BARU
+        if success:
+            # Muat data dari cache ke state aktif (self.marks, dll.)
+            self._load_media_data(file_path)
+            
+            # Tampilkan ulang frame saat ini agar anotasi (jika ada) muncul
+            self.media_player.display_frame(self.media_player.current_frame) 
+            
+            # Update UI
+            self.status_bar.showMessage(f"Loaded: {os.path.basename(file_path)}")
+            if not self.segment_map:
+                duration, frames = self.get_media_info(file_path)
+                self.total_duration_label.setText(f"Duration: {self.format_duration(duration)} ({frames})")
+            else:
+                duration_str = self.format_duration(self.current_segment_total_frames / self.media_player.fps if self.media_player.fps > 0 else 0)
+                self.total_duration_label.setText(f"Folder Total: {duration_str} ({self.current_segment_total_frames})")
+        else:
+            self.status_bar.showMessage(f"Failed to load file")
+            if not self.segment_map: # Hanya update jika tidak dalam mode segmen
+                self.update_total_duration()
+                
+        self.update_playlist_item_indicator()
+            
+    def _get_or_create_media_data(self, file_path):
+        """Mendapat atau membuat blok data untuk file path tertentu."""
+        if file_path not in self.media_data_cache:
+            self.media_data_cache[file_path] = {
+                "marks": [],
+                "annotation_marks": set(),
+                "annotations": {}
+            }
+        return self.media_data_cache[file_path]
+
+    def _save_current_media_data(self):
+        """Menyimpan marka/anotasi aktif ke cache."""
+        current_path = self.media_player.get_current_file_path()
+        if current_path:
+            # Dapatkan data untuk path saat ini (atau buat)
+            data = self._get_or_create_media_data(current_path) 
+            # Simpan state aktif saat ini ke cache
+            data["marks"] = self.marks
+            data["annotation_marks"] = self.annotation_marks
+            data["annotations"] = self.media_player.annotations
+            
+    def _load_media_data(self, file_path):
+        """Memuat data dari cache ke state aktif."""
+        # Dapatkan data dari cache (atau buat jika ini file baru)
+        data = self._get_or_create_media_data(file_path)
+        
+        # Terapkan data dari cache ke state aktif
+        self.marks = data["marks"]
+        self.annotation_marks = data["annotation_marks"]
+        self.media_player.annotations = data["annotations"]
+        
+        # Terapkan state aktif ke UI (Timeline)
+        self.timeline.set_marks(self.marks)
+        self.timeline.set_annotation_marks(self.annotation_marks)        
             
     def load_compare_files(self, file1, file2):
         # Memuat mode compare akan selalu menghapus mode segmen
