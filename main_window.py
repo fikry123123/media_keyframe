@@ -379,7 +379,7 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+Up"), self).activated.connect(self.play_previous_timeline_item)
         QShortcut(QKeySequence("Ctrl+Down"), self).activated.connect(self.play_next_timeline_item)
         QShortcut(QKeySequence(Qt.Key_F), self).activated.connect(self.toggle_mark_at_current_frame)
-        QShortcut(QKeySequence("Ctrl+Shift+M"), self).activated.connect(self.clear_all_marks)
+        QShortcut(QKeySequence("Ctrl+Shift+M"), self).activated.connect(self._shortcut_clear_all_marks)        
         QShortcut(QKeySequence(Qt.Key_BracketRight), self).activated.connect(self.jump_to_next_mark)
         QShortcut(QKeySequence(Qt.Key_BracketLeft), self).activated.connect(self.jump_to_previous_mark)
         QShortcut(QKeySequence(Qt.Key_L), self).activated.connect(self.toggle_marked_range_loop)
@@ -761,46 +761,113 @@ class MainWindow(QMainWindow):
                 self.set_draw_mode() 
 
     def clear_current_frame_drawing(self):
-        """Menghapus anotasi (drawing) hanya dari frame saat ini."""
+        """Menghapus anotasi (drawing) dan marka hijau terkait."""
         
-        # --- PERBAIKAN: Gunakan frame global jika di mode segmen ---
-        if not self.segment_map:
-            idx = self.media_player.current_frame_index
-        else:
-            # Hitung frame global dari posisi timeline
-            idx = self.timeline.current_position
-        # --- AKHIR PERBAIKAN ---
-        
-        if idx < 0:
+        global_idx = self.timeline.current_position
+        if global_idx < 0:
             return
         
         annotation_removed = False
         mark_removed = False
         
-        # Anotasi disimpan secara LOKAL di media_player per file
-        # Jadi, kita hapus dari media player saat ini
+        # 1. Tentukan file mana yang akan dimodifikasi
+        paths_to_modify_marks = []
+        path_a = self.media_player.get_current_file_path() 
+        
+        if self.compare_mode:
+            path_b = self.media_player_2.get_current_file_path()
+            if path_a: paths_to_modify_marks.append(path_a)
+            if path_b: paths_to_modify_marks.append(path_b)
+        elif path_a: # Mode Single / Segmen
+            paths_to_modify_marks.append(path_a)
+
+        # 2. Hapus GAMBAR (drawing) hanya dari Player A
         local_idx = self.media_player.current_frame_index
         if local_idx in self.media_player.annotations:
             self.media_player.annotations.pop(local_idx)
             annotation_removed = True
+            if path_a:
+                data_a = self._get_or_create_media_data(path_a)
+                if local_idx in data_a["annotations"]:
+                    data_a["annotations"].pop(local_idx)
             
-        # Marka disimpan secara GLOBAL
-        if idx in self.annotation_marks:
-            self.annotation_marks.remove(idx)
+        # 3. Hapus MARKA (hijau) dari state UI
+        if global_idx in self.annotation_marks:
+            self.annotation_marks.remove(global_idx)
             mark_removed = True
+            
+        # 4. Sinkronkan penghapusan MARKA ke semua cache file yang relevan
+        for path in paths_to_modify_marks:
+            data = self._get_or_create_media_data(path)
+            if global_idx in data["annotation_marks"]:
+                data["annotation_marks"].remove(global_idx)
             
         if mark_removed:
             self.timeline.set_annotation_marks(self.annotation_marks)
             
         if annotation_removed:
-            self.media_player.display_frame(self.media_player.displayed_frame_source)
+            if self.compare_mode:
+                self.update_composite_view()
+            else:
+                self.media_player.display_frame(self.media_player.displayed_frame_source)
             self.status_bar.showMessage(f"Drawing cleared from frame {local_idx + 1}", 2000)
         elif mark_removed:
-             self.status_bar.showMessage(f"Annotation mark cleared from frame {idx + 1}", 2000)
+             self.status_bar.showMessage(f"Annotation mark cleared from frame {global_idx + 1}", 2000)
         else:
             self.status_bar.showMessage(f"No drawing found on frame {local_idx + 1}", 2000)
 
-    # --- FUNGSI MODE DRAWING (DIPERBARUI) ---
+    def _shortcut_clear_all_marks(self):
+        """
+        Handler shortcut untuk 'Ctrl+Shift+M'.
+        Menghapus semua marka dari cache untuk file yang sedang aktif.
+        """
+        paths_to_clear = []
+        
+        if self.compare_mode:
+            path_a = self.media_player.get_current_file_path()
+            path_b = self.media_player_2.get_current_file_path()
+            if path_a: paths_to_clear.append(path_a)
+            if path_b: paths_to_clear.append(path_b)
+        else:
+            path_a = self.media_player.get_current_file_path()
+            if path_a: paths_to_clear.append(path_a)
+            
+        if not paths_to_clear:
+            self.status_bar.showMessage("No media loaded to clear marks from.", 2000)
+            return
+
+        cleared_count = 0
+        for path in paths_to_clear:
+            if path in self.media_data_cache:
+                self.media_data_cache[path]["marks"].clear()
+                self.media_data_cache[path]["annotation_marks"].clear()
+                self.media_data_cache[path]["annotations"].clear()
+                cleared_count += 1
+        
+        # 1. Panggil clear_all_marks() untuk membersihkan state UI aktif
+        #    (Ini akan membersihkan self.marks, self.annotation_marks, 
+        #    self.media_player.annotations, dan timeline UI)
+        self.clear_all_marks(clear_segments=False)
+        
+        # --- PERBAIKAN: Panggil refresh player secara manual ---
+        # 2. Muat ulang frame saat ini (untuk menghapus gambar anotasi)
+        if self.compare_mode:
+            # update_composite_view akan mengambil frame A dan B
+            # (yang datanya sudah bersih) dan memanggil display_frame()
+            self.update_composite_view() 
+        else:
+            # Kita harus memanggil display_frame() secara manual
+            # dengan frame ASLI (self.media_player.current_frame)
+            if self.media_player.current_frame is not None:
+                self.media_player.display_frame(self.media_player.current_frame)
+            else:
+                self.media_player.display_frame(None) # Kosongkan player
+        # --- AKHIR PERBAIKAN ---
+
+        if cleared_count > 0:
+            self.status_bar.showMessage(f"All marks and drawings cleared for {cleared_count} item(s).", 3000)
+        else:
+            self.status_bar.showMessage("No marks found to clear.", 2000)
     
     def set_draw_mode(self):
         """Mengaktifkan mode menggambar (pena) pada player A."""
@@ -863,20 +930,34 @@ class MainWindow(QMainWindow):
     def add_annotation_mark(self, frame_index):
         """Slot untuk menerima sinyal 'annotationAdded' dari MediaPlayer."""
         
-        # frame_index di sini adalah LOKAL (dari media_player)
-        if frame_index < 0:
+        global_frame_index = self.timeline.current_position
+            
+        if global_frame_index < 0:
             return
             
-        # --- PERBAIKAN: Ubah ke frame global ---
-        if not self.segment_map:
-            global_frame_index = frame_index
-        else:
-            global_frame_index = self.timeline.current_position
-        # --- AKHIR PERBAIKAN ---
+        if global_frame_index in self.annotation_marks:
+            return
             
-        if global_frame_index >= 0:
-            self.annotation_marks.add(global_frame_index)
-            self.timeline.set_annotation_marks(self.annotation_marks)
+        # 1. Terapkan ke state UI (gabungan)
+        self.annotation_marks.add(global_frame_index)
+
+        # 2. Tentukan file mana yang akan dimodifikasi
+        paths_to_modify = []
+        if self.compare_mode:
+            path_a = self.media_player.get_current_file_path()
+            path_b = self.media_player_2.get_current_file_path()
+            if path_a: paths_to_modify.append(path_a)
+            if path_b: paths_to_modify.append(path_b)
+        elif self.media_player.has_media(): # Mode Single / Segmen
+            path_a = self.media_player.get_current_file_path()
+            if path_a: paths_to_modify.append(path_a)
+        
+        # 3. Simpan marka hijau ke semua cache file yang relevan
+        for path in paths_to_modify:
+            data = self._get_or_create_media_data(path)
+            data["annotation_marks"].add(global_frame_index)
+            
+        self.timeline.set_annotation_marks(self.annotation_marks)
     
     def handle_file_drop_on_player(self, file_path, target_view):
         resolved_media = self._resolve_sequences_and_files([file_path])
@@ -886,9 +967,12 @@ class MainWindow(QMainWindow):
         self.update_total_duration()
         item_to_load = resolved_media[0]
         path_to_load = item_to_load[0] if isinstance(item_to_load, tuple) else item_to_load
+        
         if not self.compare_mode:
-            self.load_single_file(path_to_load, clear_marks=True, clear_segments=True)
+            # --- PERBAIKAN: Hapus argumen 'clear_marks' ---
+            self.load_single_file(path_to_load, clear_segments=True)
         else:
+            # load_compare_files sudah memanggil _save_current_media_data()
             if target_view == 'A':
                 self.load_compare_files(path_to_load, self.media_player_2.get_current_file_path())
             else:
@@ -1458,38 +1542,75 @@ class MainWindow(QMainWindow):
     def update_frame_counter_B(self, cf, tf): pass
     
     def toggle_mark_at_current_frame(self):
-        if not self.media_player.has_media(): return
+        # Selalu gunakan posisi timeline GLOBAL
+        current_global_frame = self.timeline.current_position
+        if current_global_frame < 0: return
+
+        # 1. Tentukan file mana yang akan dimodifikasi
+        paths_to_modify = []
+        if self.compare_mode:
+            path_a = self.media_player.get_current_file_path()
+            path_b = self.media_player_2.get_current_file_path()
+            if path_a: paths_to_modify.append(path_a)
+            if path_b: paths_to_modify.append(path_b)
+        elif self.media_player.has_media(): # Mode Single / Segmen
+            path_a = self.media_player.get_current_file_path()
+            if path_a: paths_to_modify.append(path_a)
         
-        # --- PERBAIKAN: Gunakan frame global jika di mode segmen ---
-        if not self.segment_map:
-            current_frame = self.media_player.current_frame_index
-        else:
-            # Hitung frame global dari posisi timeline
-            current_frame = self.timeline.current_position
-        # --- AKHIR PERBAIKAN ---
+        if not paths_to_modify:
+            return
 
-        if current_frame < 0: return
+        # 2. Cek state UI saat ini (self.marks adalah gabungan)
+        is_removing = current_global_frame in self.marks
 
-        if current_frame in self.marks:
-            self.marks.remove(current_frame)
-            self.status_bar.showMessage(f"Mark removed from frame {current_frame + 1}", 2000)
+        # 3. Terapkan perubahan ke state UI dan semua cache file
+        if is_removing:
+            self.marks.remove(current_global_frame)
+            for path in paths_to_modify:
+                data = self._get_or_create_media_data(path)
+                if current_global_frame in data["marks"]:
+                    data["marks"].remove(current_global_frame)
+            self.status_bar.showMessage(f"Mark removed from frame {current_global_frame + 1}", 2000)
         else:
-            self.marks.append(current_frame)
+            self.marks.append(current_global_frame)
             self.marks.sort()
-            self.status_bar.showMessage(f"Mark added at frame {current_frame + 1}", 2000)
-        self.timeline.set_marks(self.marks) 
+            for path in paths_to_modify:
+                data = self._get_or_create_media_data(path)
+                if current_global_frame not in data["marks"]:
+                    data["marks"].append(current_global_frame)
+                    data["marks"].sort()
+            self.status_bar.showMessage(f"Mark added at frame {current_global_frame + 1}", 2000)
+            
+        self.timeline.set_marks(self.marks)
 
     def clear_all_marks(self, clear_segments=True):
         marks_cleared = len(self.marks) > 0
-        # ... (sisa fungsi) ...
+        annotations_cleared = len(self.annotation_marks) > 0
+        self.marks.clear()
+        self.annotation_marks.clear()
+        
+        # Hapus anotasi dari player A (dan B jika ada)
+        self.media_player.annotations.clear()
+        self.media_player_2.annotations.clear()
+        
+        # --- PERBAIKAN: HAPUS BLOK INI ---
+        # if self.media_player.displayed_frame_source is not None:
+        #     self.media_player.display_frame(self.media_player.displayed_frame_source)
+        # --- AKHIR PERBAIKAN ---
+            
+        self.timeline.set_marks(self.marks)
+        self.timeline.set_annotation_marks(self.annotation_marks)
         
         # --- LOGIKA CLEAR SEGMEN BARU ---
         if clear_segments:
             self.segment_map.clear()
             self.current_segment_total_frames = 0
             self.timeline.set_segments([], 0)
-            self.current_segment_folder_item = None # <-- TAMBAHKAN INI
+            self.current_segment_folder_item = None 
         # --- AKHIR LOGIKA CLEAR SEGMEN ---
+
+        if marks_cleared or annotations_cleared:
+            self.status_bar.showMessage("All marks and drawings cleared", 2000)
         
     def jump_to_next_mark(self):
         all_marks = sorted(list(set(self.marks) | self.annotation_marks))
@@ -1887,12 +2008,51 @@ class MainWindow(QMainWindow):
         self.timeline.set_marks(self.marks)
         self.timeline.set_annotation_marks(self.annotation_marks)        
             
+    def _load_media_data_for_compare(self, file1=None, file2=None):
+        """Memuat dan MENGGABUNGKAN data untuk compare mode."""
+        
+        # Jika file tidak disediakan, gunakan yang sudah ada
+        if file1 is None:
+            file1 = self.media_player.get_current_file_path()
+        if file2 is None:
+            file2 = self.media_player_2.get_current_file_path()
+
+        data1 = self._get_or_create_media_data(file1) if file1 else None
+        data2 = self._get_or_create_media_data(file2) if file2 else None
+        
+        # Gabungkan marka untuk timeline
+        marks1 = set(data1["marks"]) if data1 else set()
+        marks2 = set(data2["marks"]) if data2 else set()
+        self.marks = sorted(list(marks1 | marks2))
+        
+        ann_marks1 = data1["annotation_marks"] if data1 else set()
+        ann_marks2 = data2["annotation_marks"] if data2 else set()
+        self.annotation_marks = ann_marks1 | ann_marks2
+        
+        # Terapkan ke UI
+        self.timeline.set_marks(self.marks)
+        self.timeline.set_annotation_marks(self.annotation_marks)        
+            
     def load_compare_files(self, file1, file2):
-        # Memuat mode compare akan selalu menghapus mode segmen
+        # 1. Simpan data file sebelumnya (jika ada)
+        self._save_current_media_data()
+        
+        # 2. Bersihkan state aktif & hapus mode segmen
         self.clear_all_marks(clear_segments=True) 
         
+        # --- PERBAIKAN: Panggil fungsi helper baru ---
+        self._load_media_data_for_compare(file1, file2)
+        # --- AKHIR PERBAIKAN ---
+        
+        # Muat media (ini akan me-reset anotasi internal player)
         self.media_player.load_media(file1)
         self.media_player_2.load_media(file2)
+        
+        # Terapkan anotasi yang sudah di-cache ke player
+        # (Data sudah dimuat oleh _load_media_data_for_compare)
+        self.media_player.annotations = self._get_or_create_media_data(file1)["annotations"]
+        self.media_player_2.annotations = self._get_or_create_media_data(file2)["annotations"]
+
         f1 = os.path.basename(file1) if file1 else "Empty"
         f2 = os.path.basename(file2) if file2 else "Empty"
         self.status_bar.showMessage(f"Comparing: {f1} vs {f2}")
@@ -1915,17 +2075,29 @@ class MainWindow(QMainWindow):
             if self.compare_timer.isActive():
                 self.compare_timer.stop()
                 self.is_compare_playing = False
+            
+            # --- PERBAIKAN: Simpan data (kosong) dari compare mode ---
+            # dan bersihkan player B
+            self._save_current_media_data() 
             self.media_player_2.clear_media()
+            # --- AKHIR PERBAIKAN ---
+
             self.media_player.display_frame(self.media_player.current_frame)
             self.media_player.set_compare_split()
             
             # Reset timeline ke file A saat ini
-            self.load_single_file(self.media_player.get_current_file_path(), clear_marks=False, clear_segments=True)
+            # --- PERBAIKAN: Hapus argumen 'clear_marks' ---
+            self.load_single_file(self.media_player.get_current_file_path(), clear_segments=True)
         
         # Masuk ke mode compare
         else:
+            # --- PERBAIKAN: Simpan data dari mode single ---
+            self._save_current_media_data()
+            # --- AKHIR PERBAIKAN ---
+
             # Matikan mode segmen jika aktif
             if self.segment_map:
+                # Panggil clear_all_marks untuk membersihkan state aktif
                 self.clear_all_marks(clear_segments=True)
                 # Muat ulang file A saat ini (yang mungkin bagian dari segmen)
                 self.media_player.load_media(self.media_player.get_current_file_path())
@@ -1949,35 +2121,44 @@ class MainWindow(QMainWindow):
         else:
             self.frame_counter_label.setText("No Media")
             
-        # Dapatkan dimensi dari frame *asli* jika ada
         h_a, w_a = (frame_a_orig.shape[0], frame_a_orig.shape[1]) if frame_a_orig is not None else (480, 640)
         h_b, w_b = (frame_b_orig.shape[0], frame_b_orig.shape[1]) if frame_b_orig is not None else (480, 640)
 
-        # Terapkan Anotasi (HANYA pada frame asli)
-        if frame_a_orig is not None:
-            annotation_image_a = self.media_player.annotations.get(self.media_player.current_frame_index)
-            if annotation_image_a:
-                h_ann, w_ann = annotation_image_a.height(), annotation_image_a.width()
-                if h_ann > 0 and w_ann > 0:
-                    ptr = annotation_image_a.bits()
-                    ptr.setsize(h_ann * w_ann * 4)
-                    arr = np.frombuffer(ptr, np.uint8).reshape((h_ann, w_ann, 4)) # BGRA
-                    
-                    bgr_ann = arr[:, :, :3]
-                    alpha_ann = arr[:, :, 3] / 255.0
-                    
-                    if (h_a, w_a) != (h_ann, w_ann):
-                        bgr_ann = cv2.resize(bgr_ann, (w_a, h_a), interpolation=cv2.INTER_NEAREST)
-                        alpha_ann = cv2.resize(alpha_ann, (w_a, h_a), interpolation=cv2.INTER_NEAREST)
+        # --- FUNGSI HELPER UNTUK MENGGAMBAR ANOTASI ---
+        def apply_annotation(source_frame, annotation_image, frame_h, frame_w):
+            if source_frame is None or annotation_image is None:
+                return source_frame
+            
+            h_ann, w_ann = annotation_image.height(), annotation_image.width()
+            if h_ann <= 0 or w_ann <= 0:
+                return source_frame
+            
+            ptr = annotation_image.bits()
+            ptr.setsize(h_ann * w_ann * 4)
+            arr = np.frombuffer(ptr, np.uint8).reshape((h_ann, w_ann, 4)) # BGRA
+            
+            bgr_ann = arr[:, :, :3]
+            alpha_ann = arr[:, :, 3] / 255.0
+            
+            if (frame_h, frame_w) != (h_ann, w_ann):
+                bgr_ann = cv2.resize(bgr_ann, (frame_w, frame_h), interpolation=cv2.INTER_NEAREST)
+                alpha_ann = cv2.resize(alpha_ann, (frame_w, frame_h), interpolation=cv2.INTER_NEAREST)
 
-                    # --- PERBAIKAN: Konversi tipe data ke float32 ---
-                    alpha_ann = alpha_ann.astype(np.float32) 
-                    # --- AKHIR PERBAIKAN ---
-                    
-                    alpha_ann = cv2.cvtColor(alpha_ann, cv2.COLOR_GRAY2BGR) 
-                    
-                    # Terapkan ke frame_a_orig
-                    frame_a_orig = (frame_a_orig * (1 - alpha_ann) + bgr_ann * alpha_ann).astype(np.uint8)
+            alpha_ann = alpha_ann.astype(np.float32) 
+            alpha_ann = cv2.cvtColor(alpha_ann, cv2.COLOR_GRAY2BGR) 
+            
+            # Terapkan ke frame
+            return (source_frame * (1 - alpha_ann) + bgr_ann * alpha_ann).astype(np.uint8)
+        # --- AKHIR FUNGSI HELPER ---
+
+        # Terapkan Anotasi A (Player 1)
+        annotation_image_a = self.media_player.annotations.get(self.media_player.current_frame_index)
+        frame_a_orig = apply_annotation(frame_a_orig, annotation_image_a, h_a, w_a)
+
+        # --- PERBAIKAN: Terapkan Anotasi B (Player 2) ---
+        annotation_image_b = self.media_player_2.annotations.get(self.media_player_2.current_frame_index)
+        frame_b_orig = apply_annotation(frame_b_orig, annotation_image_b, h_b, w_b)
+        # --- AKHIR PERBAIKAN ---
 
         # Buat Placeholder JIKA DIPERLUKAN
         frame_a = frame_a_orig if frame_a_orig is not None else self.create_placeholder_frame("View A", w_a, h_a)
@@ -1985,7 +2166,11 @@ class MainWindow(QMainWindow):
         
         # Lanjutkan Penskalaan dan Penggabungan
         target_h = min(frame_a.shape[0], frame_b.shape[0])
-        if target_h <= 0: return
+        if target_h <= 0: 
+            # Jika kedua frame tidak valid, coba tampilkan placeholder
+            if frame_a_orig is None and frame_b_orig is None:
+                self.media_player.display_frame(self.create_placeholder_frame("No Media", 640, 480))
+            return
         
         new_w_a = int(frame_a.shape[1] * (target_h / frame_a.shape[0])) if frame_a.shape[0] > 0 else 0
         new_w_b = int(frame_b.shape[1] * (target_h / frame_b.shape[0])) if frame_b.shape[0] > 0 else 0
@@ -1995,8 +2180,7 @@ class MainWindow(QMainWindow):
         
         self.media_player.set_compare_split(frame_a_res.shape[1], frame_b_res.shape[1])
         composite = cv2.hconcat([frame_a_res, frame_b_res])
-        self.media_player.display_frame(composite) 
-        # --- AKHIR PERBAIKAN COMPARE MODE ---
+        self.media_player.display_frame(composite)
         
     def update_playlist_item_indicator(self):
         path_a = self.media_player.get_current_file_path()
