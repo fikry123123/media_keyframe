@@ -379,8 +379,6 @@ class MainWindow(QMainWindow):
 
     def setup_shortcuts(self):
         # HANYA shortcut dasar navigasi frame yang tidak ada di menu
-        QShortcut(QKeySequence(Qt.Key_Left), self).activated.connect(self.previous_frame)
-        QShortcut(QKeySequence(Qt.Key_Right), self).activated.connect(self.next_frame)
         QShortcut(QKeySequence(Qt.Key_Home), self).activated.connect(self.go_to_first_frame)
         QShortcut(QKeySequence(Qt.Key_End), self).activated.connect(self.go_to_last_frame)
 
@@ -1455,18 +1453,75 @@ class MainWindow(QMainWindow):
             # --- AKHIR LOGIKA SEGMEN ---
             
     def open_file(self):
-        file_paths, _ = QFileDialog.getOpenFileNames(self, "Open Media File", "", "Media Files (*.mp4 *.avi *.mov *.mkv *.jpg *.png *.jpeg *.bmp *.tiff);;All Files (*)")
+        # Minta pengguna memilih satu atau lebih file
+        file_paths, _ = QFileDialog.getOpenFileNames(
+            self, 
+            "Open Media File(s)", 
+            "", # Direktori awal (kosong = terakhir digunakan)
+            "Media Files (*.mp4 *.avi *.mov *.mkv *.jpg *.png *.jpeg *.bmp *.tiff *.exr *.dpx);;All Files (*)"
+        )
+        
         if file_paths:
+            # Proses file yang dipilih (bisa jadi sequence)
             resolved_media = self._resolve_sequences_and_files(file_paths)
+            if not resolved_media:
+                self.status_bar.showMessage("No valid media found in selection.", 3000)
+                return
+                
+            # Tambahkan semua media yang ditemukan ke Source panel
             self.add_files_to_source(resolved_media)
-            if resolved_media:
-                item_to_load = resolved_media[0]
-                path_to_load = item_to_load[0] if isinstance(item_to_load, tuple) else item_to_load
-                self.load_single_file(path_to_load, clear_marks=True, clear_segments=True)
+            self.update_total_duration() # Perbarui total durasi
+
+            # Muat item pertama yang dipilih ke player
+            item_to_load = resolved_media[0]
+            # Dapatkan path asli (bukan display name)
+            path_to_load = item_to_load[0] if isinstance(item_to_load, tuple) else item_to_load
+            
+            # --- PERBAIKAN: Hapus argumen 'clear_marks' ---
+            self.load_single_file(path_to_load, clear_segments=True)
+            # --- AKHIR PERBAIKAN ---
+
+            # Pilih item yang baru dimuat di tree Source (jika ditemukan)
+            item_in_tree = self.find_item_by_path_recursive(path_to_load, self.source_item)
+            if item_in_tree:
+                self.playlist_widget.setCurrentItem(item_in_tree)
             
     def open_image_sequence(self, file_paths):
         folder_path = QFileDialog.getExistingDirectory(self, "Select Folder", "")
         if folder_path: pass
+    
+    def _collect_media_paths_recursive(self, parent_item):
+        """
+        Mengumpulkan semua file path (dari data Qt.UserRole) di bawah
+        item ini dan semua turunannya, secara rekursif. Mengembalikan set path.
+        """
+        paths = set()
+        path = parent_item.data(0, Qt.UserRole)
+        if path:
+            paths.add(path) # Tambahkan path item itu sendiri jika ada
+
+        # Tambahkan path dari semua anak
+        for i in range(parent_item.childCount()):
+            child = parent_item.child(i)
+            paths.update(self._collect_media_paths_recursive(child)) # Panggil rekursif
+
+        return paths    
+        
+    def _normalize_media_path(self, path):
+        """Normalisasi path (opsional, tergantung implementasi Anda sebelumnya)."""
+        if not path:
+            return None
+        # Tambahkan normalisasi jika diperlukan (misal, case-insensitive)
+        return os.path.normpath(path)    
+    
+    def _is_in_timeline_branch(self, item):
+        """Checks if an item is the Timeline root or any of its descendants."""
+        parent = item
+        while parent:
+            if parent == self.timeline_item:
+                return True
+            parent = parent.parent()
+        return False
         
     def save_playlist(self):
         default_path = self.last_playlist_path or os.getcwd()
@@ -1756,45 +1811,61 @@ class MainWindow(QMainWindow):
             current_global_frame = self.timeline.current_position
             if current_global_frame < self.current_segment_total_frames - 1:
                 self.seek_to_position(current_global_frame + 1)
-        # --- AKHIR PERBAIKAN ---
+
             
     def seek_to_position(self, position, _internal_call=False):
-        # --- PERBAIKAN: Jangan hentikan tour jika dipanggil oleh tour itu sendiri ---
         if self.is_mark_tour_active and not _internal_call:
             self.toggle_mark_tour()
-        # --- AKHIR PERBAIKAN ---
             
         if self.media_player.drawing_enabled: self.set_drawing_off() 
         
-        # --- LOGIKA SEEKING SEGMEN BARU ---
         if not self.segment_map:
-            # Mode Normal (File Tunggal)
-            self.media_player.seek_to_position(position)
+            # Mode Normal (File Tunggal) atau Compare
+            target_pos = position
+            # Pastikan posisi valid untuk player A
+            if self.media_player.has_media() and self.media_player.total_frames > 0:
+                 target_pos = max(0, min(position, self.media_player.total_frames - 1))
+            
+            self.media_player.seek_to_position(target_pos)
+            
             if self.compare_mode:
-                self.media_player_2.seek_to_position(position)
-                self.update_composite_view()
+                # Pastikan posisi valid untuk player B
+                target_pos_b = position
+                if self.media_player_2.has_media() and self.media_player_2.total_frames > 0:
+                     target_pos_b = max(0, min(position, self.media_player_2.total_frames - 1))
+                self.media_player_2.seek_to_position(target_pos_b)
+                self.update_composite_view() # Refresh tampilan gabungan
         else:
             # Mode Segmen (Folder Timeline)
             if self.compare_mode:
                 self.toggle_compare_mode(False) # Mode segmen = single view
             
-            # Pastikan posisi valid
+            # Pastikan posisi valid dalam jangkauan global
+            if self.current_segment_total_frames <= 0: return # Tidak ada durasi
             position = max(0, min(position, self.current_segment_total_frames - 1))
             
             target_segment = None
             # Cari segmen mana yang berisi 'position' (frame global)
             for segment in self.segment_map:
-                seg_end_frame = segment['start_frame'] + segment['duration']
-                if position >= segment['start_frame'] and position < seg_end_frame:
+                seg_start_frame = segment['start_frame']
+                seg_end_frame = seg_start_frame + segment['duration']
+                # Cari segmen di mana: start <= position < end
+                if position >= seg_start_frame and position < seg_end_frame:
                     target_segment = segment
                     break
             
-            # Jika tidak ketemu (misal, klik di frame terakhir), gunakan segmen terakhir
+            # --- PERBAIKAN: Penanganan kasus frame terakhir ---
+            # Jika tidak ketemu (karena position == frame terakhir global)
+            # dan position memang frame terakhir global, gunakan segmen terakhir.
             if not target_segment and self.segment_map and position == self.current_segment_total_frames - 1:
-                 target_segment = self.segment_map[-1]
-            
+                last_segment = self.segment_map[-1]
+                # Pastikan frame terakhir memang ada di segmen terakhir
+                if position >= last_segment['start_frame']:
+                     target_segment = last_segment
+            # --- AKHIR PERBAIKAN ---
+
             if not target_segment:
-                print(f"Seek error: Tidak bisa menemukan segmen untuk frame global {position}")
+                print(f"Seek error: Cannot find segment for global frame {position}")
                 return # Tidak ada segmen untuk di-seek
 
             # Hitung frame lokal di dalam segmen
@@ -1803,16 +1874,17 @@ class MainWindow(QMainWindow):
             # Cek apakah kita perlu memuat file baru
             current_path = self.media_player.get_current_file_path()
             if target_segment['path'] != current_path:
-                # --- PERBAIKAN: Hapus argumen 'clear_marks' ---
                 self.load_single_file(target_segment['path'], clear_segments=False)
             
             # Seek ke frame lokal
+            # Pastikan frame lokal valid (meskipun seharusnya sudah valid)
+            local_frame = max(0, min(local_frame, target_segment['duration'] -1))
             self.media_player.seek_to_position(local_frame)
             
             # Update manual frame counter (karena sinyal frameIndexChanged
             # akan mengirim frame LOKAL, tapi kita perlu update GLOBAL)
+            # Pastikan kita mengirim frame lokal yang valid
             self.update_frame_counter(local_frame, target_segment['duration'])
-        # --- AKHIR LOGIKA SEEKING SEGMEN ---
             
     def update_frame_counter(self, current_frame, total_frames):
         # current_frame dan total_frames di sini adalah LOKAL (dari media_player)
@@ -2152,29 +2224,34 @@ class MainWindow(QMainWindow):
     def play_next_timeline_item(self):
         # Fungsi ini HANYA untuk mode tree (non-segmen)
         if self.segment_map: return # Ditangani oleh handle_playback_finished
-        
+
         current_path = self.media_player.get_current_file_path()
         current_item = self.find_item_by_path_recursive(current_path, self.timeline_item)
         if not current_item or not current_item.parent(): return
-        
+
         parent = current_item.parent()
         current_index = parent.indexOfChild(current_item)
         next_item = None
-        
+
         # Cari item file berikutnya di dalam folder yang sama
         for i in range(current_index + 1, parent.childCount()):
             potential_next = parent.child(i)
             if potential_next.data(0, Qt.UserRole):
                 next_item = potential_next
                 break
-        
+
         if next_item:
             self.playlist_widget.setCurrentItem(next_item)
             next_file_path = next_item.data(0, Qt.UserRole)
-            self.load_single_file(next_file_path, clear_marks=False, clear_segments=True) # Hapus segmen lama
+
+            # --- PERBAIKAN: Hapus argumen 'clear_marks' ---
+            self.load_single_file(next_file_path, clear_segments=True) # Hapus segmen lama
+            # --- AKHIR PERBAIKAN ---
+
             if self.playback_mode == PlaybackMode.PLAY_NEXT:
                 QTimer.singleShot(100, self.media_player.toggle_play)
         else:
+            # Jika tidak ada item berikutnya, kembali ke Play Once
             self.set_playback_mode(PlaybackMode.PLAY_ONCE)
                 
     def play_previous_timeline_item(self):
@@ -2702,30 +2779,87 @@ class MainWindow(QMainWindow):
             self.media_player.has_finished = False
     
     def go_to_last_frame(self):
+        # 1. Hentikan playback & drawing (seperti sebelumnya)
         if self.is_compare_playing:
             self.compare_timer.stop()
             self.is_compare_playing = False
             self.controls.set_play_state(False)
         elif self.media_player.is_playing:
             self.media_player.toggle_play()
-        if self.media_player.drawing_enabled: self.set_drawing_off() 
+        if self.media_player.drawing_enabled: self.set_drawing_off()
+
+        # 2. Tentukan player mana yang akan di-seek
+        target_player = self.media_player
+        other_player = self.media_player_2 if self.compare_mode else None
         
-        # --- PERBAIKAN: Gunakan durasi global ---
-        if self.compare_mode:
-            total = max(self.media_player.total_frames, self.media_player_2.total_frames)
-            if total > 0:
-                self.seek_to_position(total - 1)
-        elif self.segment_map:
-            total = self.current_segment_total_frames
-            if total > 0:
-                self.seek_to_position(total - 1)
-        else:
-            total = self.media_player.total_frames
-            if total > 0:
-                self.seek_to_position(total - 1)
+        # --- PERBAIKAN: Logika baru untuk seek ke akhir ---
+        
+        # Fungsi helper untuk seek ke akhir satu player
+        def seek_player_to_end(player):
+            if player.has_media() and player.total_frames > 0:
+                total = player.total_frames
+                target_frame = total - 1 
+
+                # Coba seek ke frame sebelum terakhir (lebih aman)
+                seek_pos = max(0, total - 2) 
+                player.video_capture.set(cv2.CAP_PROP_POS_FRAMES, seek_pos)
+                
+                # Baca frame berikutnya (seharusnya frame terakhir)
+                ret, frame = player.video_capture.read()
+                if ret:
+                    player.current_frame = frame
+                    # Dapatkan posisi aktual setelah membaca
+                    actual_pos = int(player.video_capture.get(cv2.CAP_PROP_POS_FRAMES)) - 1
+                    player.current_frame_index = actual_pos
+                    player.display_frame(frame) # Tampilkan frame terakhir
+                    # Kirim sinyal dengan posisi aktual
+                    player.frameIndexChanged.emit(player.current_frame_index, player.total_frames) 
+                else:
+                    # Jika gagal baca, coba seek langsung ke frame terakhir
+                    seek_pos = max(0, total - 1)
+                    player.video_capture.set(cv2.CAP_PROP_POS_FRAMES, seek_pos)
+                    ret, frame = player.video_capture.read()
+                    if ret:
+                         player.current_frame = frame
+                         actual_pos = int(player.video_capture.get(cv2.CAP_PROP_POS_FRAMES)) - 1
+                         player.current_frame_index = actual_pos
+                         player.display_frame(frame)
+                         player.frameIndexChanged.emit(player.current_frame_index, player.total_frames)
+                    else:
+                         # Jika masih gagal, set index manual
+                         player.current_frame_index = total - 1
+                         # Tampilkan frame terakhir yg diketahui (jika ada) atau kosongkan
+                         player.display_frame(player.current_frame if player.current_frame is not None else None)
+                         player.frameIndexChanged.emit(player.current_frame_index, player.total_frames)
+
+                player.has_finished = True # Tandai selesai
+                player._sync_audio_to_current_frame(force=True)
+                player._reset_playback_clock()
+                return player.current_frame_index # Kembalikan posisi akhir aktual
+            return -1 # Gagal seek
+
+        # Eksekusi seek ke akhir
+        final_pos_a = seek_player_to_end(target_player)
+        final_pos_b = -1
+        if other_player:
+            final_pos_b = seek_player_to_end(other_player)
+
+        # Update timeline (gunakan posisi global jika di mode segmen)
+        if self.segment_map:
+            if self.current_segment_total_frames > 0:
+                self.timeline.set_position(self.current_segment_total_frames - 1)
+        elif self.compare_mode:
+             # Gunakan posisi frame terbesar dari A atau B
+             final_pos_global = max(final_pos_a, final_pos_b)
+             if final_pos_global >= 0:
+                 self.timeline.set_position(final_pos_global)
+        else: # Mode Single
+             if final_pos_a >= 0:
+                 self.timeline.set_position(final_pos_a)
+
         # --- AKHIR PERBAIKAN ---
 
-        # Tandai sebagai selesai (penting untuk logika 'play')
+        # Tandai selesai (redundant, tapi aman)
         self.media_player.has_finished = True
         if self.compare_mode:
              self.media_player_2.has_finished = True
