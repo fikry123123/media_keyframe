@@ -26,9 +26,7 @@ from drawing_toolbar import DrawingToolbar
 from sequence_capture import create_media_capture
 import json 
 
-# ... import lainnya ...
-
-# Di dalam file main_window.py:
+# (Pastikan 'import json' dan 'import re' ada di atas file main_window.py)
 
 class ProjectTreeWidget(QTreeWidget):
     filesDroppedOnTarget = pyqtSignal(list, object)
@@ -39,9 +37,32 @@ class ProjectTreeWidget(QTreeWidget):
         super().__init__(parent)
         self.source_item = None
         self.timeline_item = None
-        # --- TAMBAHAN: Definisikan MIME type kustom ---
+        # --- Definisikan MIME type kustom ---
         self.custom_mime_type = "application/x-kenae-playlist-items"
-        # --- AKHIR TAMBAHAN ---
+
+    # --- FUNGSI HELPER (BANTU) ---
+    
+    def _is_in_timeline_branch(self, item):
+        """Helper: Cek apakah item adalah Timeline root atau di dalamnya."""
+        if not item: return False
+        if item == self.timeline_item: return True
+        parent = item.parent()
+        while parent:
+            if parent == self.timeline_item:
+                return True
+            parent = parent.parent()
+        return False
+
+    def _is_in_source_branch(self, item):
+        """Helper: Cek apakah item adalah Source root atau di dalamnya."""
+        if not item: return False
+        if item == self.source_item: return True
+        parent = item.parent()
+        while parent:
+            if parent == self.source_item:
+                return True
+            parent = parent.parent()
+        return False
 
     def startDrag(self, supportedActions):
         drag = QDrag(self)
@@ -51,225 +72,1765 @@ class ProjectTreeWidget(QTreeWidget):
         if not selected_items:
             return
 
-        # Cek apakah item berasal dari 'Source'
-        is_from_source = all(item.parent() == self.source_item for item in selected_items)
-        
-        # --- Kumpulkan data file ---
+        # --- Cek apakah ada path file yang valid untuk di-drag ---
         paths = []
-        items_data = [] # Untuk data rename (path, display_name)
-        has_files = False
-        
         for item in selected_items:
             path = item.data(0, Qt.UserRole)
             if path:
-                has_files = True
                 paths.append(path)
-                # Hanya kumpulkan data rename jika dari Source
-                if is_from_source:
-                    display_name = item.text(0)
-                    items_data.append((path, display_name))
         
-        # --- Set Mime Data jika ada file ---
-        if has_files:
-            # Data standar untuk player (selalu ada jika ada file)
-            mime_data.setData("application/x-playlist-paths", bytearray(",".join(paths), 'utf-8'))
-            
-            # Data kustom untuk rename (hanya jika dari Source)
-            if is_from_source:
-                try:
-                    serialized_data = json.dumps(items_data)
-                    mime_data.setData(self.custom_mime_type, bytearray(serialized_data, 'utf-8'))
-                except Exception as e:
-                    print(f"Error serializing drag data: {e}")
+        # Jika tidak ada path (misal folder), biarkan super() menangani drag internal
+        if not paths:
+            super().startDrag(supportedActions)
+            return
 
-        # --- Logika Folder Drag ---
-        has_folders = any(item.data(0, Qt.UserRole) is None for item in selected_items)
+        # --- ADA PATH, jadi kita buat MIME data ---
         
-        if has_folders:
-            if is_from_source:
-                # Kita sedang drag dari Source.
-                if not has_files:
-                    # Jika HANYA folder, jangan izinkan drag (mencegah 'move' yg salah)
-                    return 
-                # Jika ada file + folder, biarkan file yg di-drag (kode di bawah)
-            else:
-                # Kita sedang drag dari Timeline.
-                if not has_files:
-                    # Jika HANYA folder, gunakan 'super()' untuk 'internal move' folder
-                    super().startDrag(supportedActions)
-                    return
-                # Jika ada file + folder, biarkan file yg di-drag (kode di bawah)
+        # 1. Set data standar untuk player (selalu)
+        mime_data.setData("application/x-playlist-paths", bytearray(",".join(paths), 'utf-8'))
 
-        # --- Eksekusi Drag (Hanya jika ada file) ---
-        if not has_files:
-            return # Seharusnya sudah ditangani oleh 'has_folders'
-
-        drag.setMimeData(mime_data)
+        # 2. Cek apakah dari Source untuk data rename kustom
+        is_from_source = all(item.parent() == self.source_item for item in selected_items)
         
         if is_from_source:
-            # Drag dari Source SELALU Copy
-            drag.exec_(Qt.CopyAction)
+            # --- DARI SOURCE (COPY + RENAME) ---
+            items_data = [] 
+            for item in selected_items:
+                path = item.data(0, Qt.UserRole)
+                display_name = item.text(0)
+                if path:
+                    items_data.append((path, display_name))
+            
+            try:
+                serialized_data = json.dumps(items_data)
+                mime_data.setData(self.custom_mime_type, bytearray(serialized_data, 'utf-8'))
+            except Exception as e:
+                print(f"Error serializing drag data: {e}")
+            
+            drag.setMimeData(mime_data)
+            drag.exec_(Qt.CopyAction) # Hanya boleh copy dari source
+
         else:
-            # Drag dari Timeline bisa Move atau Copy (Ctrl)
-            drag.exec_(supportedActions)
+            # --- DARI TIMELINE (MOVE + COPY) ---
+            drag.setMimeData(mime_data)
+            # Izinkan Move (default) dan Copy (jika user menekan Ctrl)
+            drag.exec_(supportedActions) 
 
     def dragEnterEvent(self, event: QDragEnterEvent):
-        # --- PERBAIKAN: Terima MIME type kustom kita ---
         if (event.mimeData().hasUrls() or 
             event.mimeData().hasFormat("application/x-playlist-paths") or
             event.mimeData().hasFormat(self.custom_mime_type)):
-        # --- AKHIR PERBAIKAN ---
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event) 
+
+    def dragMoveEvent(self, event):
+        # Ini adalah fungsi yang "santai" dan mengizinkan drag
+        # Ini akan mengizinkan kursor Anda (tidak error)
+        
+        target_item = self.itemAt(event.pos())
+        is_valid_target = False # Default-nya jangan izinkan
+
+        if not target_item:
+             event.ignore(); return
+
+        # --- 1. Cek Drop ke Diri Sendiri ---
+        if event.source() == self and self.selectedItems():
+            dragged_item = self.selectedItems()[0]
+            check_parent = target_item
+            while check_parent:
+                if check_parent == dragged_item:
+                    event.ignore(); return # Tolak
+                check_parent = check_parent.parent()
+
+        # --- 2. Cek Aksi Utama ---
+        
+        # Cek apakah kita drag file
+        is_dragging_file = (event.mimeData().hasUrls() or 
+                            event.mimeData().hasFormat(self.custom_mime_type) or
+                            event.mimeData().hasFormat("application/x-playlist-paths"))
+        
+        # Cek apakah kita drag folder (internal)
+        is_dragging_folder = (event.source() == self and not is_dragging_file)
+
+        # Cek target (MEMANGGIL FUNGSI HELPER DENGAN BENAR)
+        target_in_timeline = self._is_in_timeline_branch(target_item)
+        target_in_source = self._is_in_source_branch(target_item)
+
+        # --- 3. Logika Izin Drop ---
+
+        if is_dragging_file:
+            # 3a. Drag file ke Source (hanya OS)
+            if target_in_source and event.mimeData().hasUrls():
+                is_valid_target = True
+            
+            # 3b. Drag file ke Timeline (Izinkan semua, dropEvent akan urus)
+            elif target_in_timeline:
+                is_valid_target = True # <-- Selalu izinkan drag di timeline
+
+        elif is_dragging_folder:
+            # 3c. Drag folder (hanya reorder internal)
+            if target_in_timeline or target_in_source:
+                is_valid_target = True
+
+        # --- 4. Finalisasi ---
+        if is_valid_target:
+            event.accept() # <-- Ini akan mengizinkan kursor Anda
+        else:
+            event.ignore()
+            
+    def dropEvent(self, event: QDropEvent):
+        source_changed = False
+        timeline_reordered = False
+
+        target_item = self.itemAt(event.pos())
+        drop_indicator = self.dropIndicatorPosition()
+
+        # --- LOGIKA "UBAH URUTAN MUDAH" ---
+        # Ini adalah logika yang Anda minta: "drag ke video"
+        
+        target_is_file = False
+        if target_item:
+            target_is_file = (target_item.data(0, Qt.UserRole) is not None)
+        
+        # Cek apakah kita drag DARI DALAM timeline
+        is_internal_move = (event.source() == self and 
+                            event.mimeData().hasFormat("application/x-playlist-paths"))
+        
+        if target_is_file and drop_indicator == QAbstractItemView.OnItem and is_internal_move:
+            # Jika drop "DI ATAS" file video (seperti di video Anda)
+            # dan itu adalah 'move' internal (ubah urutan),
+            # ubah perilakunya menjadi "DI ANTARA" (AboveItem)
+            # Ini akan menempatkan Video B SEBELUM Video A
+            drop_indicator = QAbstractItemView.AboveItem
+        # --- AKHIR LOGIKA BARU ---
+
+        # Tentukan target drop (parent) dan posisi (index)
+        parent_item = None
+        insert_index = -1
+
+        if not target_item: # Drop di area kosong
+            if event.mimeData().hasUrls():
+                parent_item = self.source_item 
+            else:
+                parent_item = self.timeline_item
+        elif drop_indicator == QAbstractItemView.AboveItem:
+            parent_item = target_item.parent()
+            insert_index = parent_item.indexOfChild(target_item)
+        elif drop_indicator == QAbstractItemView.BelowItem:
+            parent_item = target_item.parent()
+            insert_index = parent_item.indexOfChild(target_item) + 1
+        elif drop_indicator == QAbstractItemView.OnItem:
+            # Ini sekarang akan terjadi pada FOLDER
+            # atau jika drag file DARI SOURCE ke video
+            parent_item = target_item 
+            insert_index = -1
+        
+        # (Perbaikan untuk edge case)
+        if target_item == self.source_item or target_item == self.timeline_item:
+            parent_item = target_item
+            insert_index = -1
+
+        if not parent_item:
+            event.ignore()
+            return
+
+        # --- LOGIKA DROP (Sama seperti sebelumnya) ---
+
+        # 1. File dari OS
+        if event.mimeData().hasUrls():
+            files = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
+            if files:
+                target_root = parent_item
+                if not (self._is_in_timeline_branch(parent_item)):
+                     target_root = self.source_item 
+                     
+                self.filesDroppedOnTarget.emit(files, target_root)
+                source_changed = True
+            event.accept()
+
+        # 2. Drop dari Source (dengan data rename) -> Selalu COPY
+        elif event.mimeData().hasFormat(self.custom_mime_type):
+            if not self._is_in_timeline_branch(parent_item):
+                event.ignore(); return
+            
+            items_to_add = []
+            try:
+                serialized_data = bytes(event.mimeData().data(self.custom_mime_type)).decode('utf-8')
+                items_to_add = json.loads(serialized_data)
+            except Exception as e:
+                print(f"Error parsing custom mime data: {e}"); event.ignore(); return
+
+            for file_path, display_name in reversed(items_to_add):
+                is_duplicate = False
+                for i in range(parent_item.childCount()):
+                    if parent_item.child(i).data(0, Qt.UserRole) == file_path:
+                        is_duplicate = True; break
+                if not is_duplicate:
+                    new_item = QTreeWidgetItem([display_name])
+                    new_item.setData(0, Qt.UserRole, file_path)
+                    new_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled | Qt.ItemIsEditable)
+                    new_item.setToolTip(0, file_path)
+                    
+                    if insert_index != -1:
+                        parent_item.insertChild(insert_index, new_item)
+                    else:
+                        parent_item.addChild(new_item)
+                    source_changed = True
+                    timeline_reordered = True
+            event.accept()
+
+        # 3. Drop dari Timeline (Move atau Copy)
+        elif event.mimeData().hasFormat("application/x-playlist-paths"):
+            
+            if not self._is_in_timeline_branch(parent_item):
+                event.ignore(); return
+
+            # 3a. INTERNAL MOVE (dari Timeline ke Timeline)
+            if event.source() == self and (event.possibleActions() & Qt.MoveAction) and (event.dropAction() == Qt.MoveAction):
+                items_to_move = self.selectedItems()
+                for item in items_to_move:
+                    old_parent = item.parent()
+                    if not old_parent: continue
+                    
+                    check_anc = parent_item
+                    is_invalid_drop = False
+                    while check_anc:
+                        if check_anc == item: is_invalid_drop = True; break
+                        check_anc = check_anc.parent()
+                    if is_invalid_drop: continue
+
+                    taken_item = old_parent.takeChild(old_parent.indexOfChild(item))
+                    
+                    if insert_index != -1:
+                        parent_item.insertChild(insert_index, taken_item)
+                        insert_index += 1 # Jaga urutan jika > 1 item
+                    else:
+                        parent_item.addChild(taken_item)
+
+                event.acceptProposedAction() 
+                source_changed = True
+                timeline_reordered = True
+
+            # 3b. COPY (dari Timeline/Ctrl+Drag)
+            else: 
+                paths_data = event.mimeData().data("application/x-playlist-paths")
+                paths = str(paths_data, 'utf-8').split(',')
+                selected_map = {}
+                if event.source() == self:
+                    selected_map = {item.data(0, Qt.UserRole): item.text(0) for item in self.selectedItems()}
+
+                for file_path in reversed(paths):
+                    is_duplicate = False
+                    for i in range(parent_item.childCount()):
+                        if parent_item.child(i).data(0, Qt.UserRole) == file_path:
+                            is_duplicate = True; break
+                    if is_duplicate: continue 
+
+                    display_name = selected_map.get(file_path, os.path.basename(file_path))
+                    new_item = QTreeWidgetItem([display_name])
+                    new_item.setData(0, Qt.UserRole, file_path)
+                    new_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled | Qt.ItemIsEditable)
+                    new_item.setToolTip(0, file_path)
+                    
+                    if insert_index != -1:
+                        parent_item.insertChild(insert_index, new_item)
+                    else:
+                        parent_item.addChild(new_item)
+                    
+                    source_changed = True
+                    timeline_reordered = True
+                event.accept()
+
+        # 4. Drop folder internal (dari super().startDrag())
+        else:
+            # Ini akan menangani reorder folder di Source dan Timeline
+            super().dropEvent(event)
+            if event.isAccepted():
+                source_changed = True
+                timeline_reordered = True
+        
+        if source_changed:
+            self.treeChanged.emit()
+        if timeline_reordered:
+            self.timelineOrderChanged.emit()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.source_item = None
+        self.timeline_item = None
+        # --- Definisikan MIME type kustom ---
+        self.custom_mime_type = "application/x-kenae-playlist-items"
+
+    # --- FUNGSI HELPER (BANTU) ---
+    
+    def _is_in_timeline_branch(self, item):
+        """Helper: Cek apakah item adalah Timeline root atau di dalamnya."""
+        if not item: return False
+        if item == self.timeline_item: return True
+        parent = item.parent()
+        while parent:
+            if parent == self.timeline_item:
+                return True
+            parent = parent.parent()
+        return False
+
+    def _is_in_source_branch(self, item):
+        """Helper: Cek apakah item adalah Source root atau di dalamnya."""
+        if not item: return False
+        if item == self.source_item: return True
+        parent = item.parent()
+        while parent:
+            if parent == self.source_item:
+                return True
+            parent = parent.parent()
+        return False
+    
+    # --- FUNGSI DRAG/DROP UTAMA ---
+
+    def startDrag(self, supportedActions):
+        drag = QDrag(self)
+        mime_data = QMimeData()
+        
+        selected_items = self.selectedItems()
+        if not selected_items:
+            return
+
+        # --- Cek apakah ada path file yang valid untuk di-drag ---
+        paths = []
+        for item in selected_items:
+            path = item.data(0, Qt.UserRole)
+            if path:
+                paths.append(path)
+        
+        # Jika tidak ada path (misal folder), biarkan super() menangani drag internal
+        if not paths:
+            super().startDrag(supportedActions)
+            return
+
+        # --- ADA PATH, jadi kita buat MIME data ---
+        
+        # 1. Set data standar untuk player (selalu)
+        mime_data.setData("application/x-playlist-paths", bytearray(",".join(paths), 'utf-8'))
+
+        # 2. Cek apakah dari Source untuk data rename kustom
+        is_from_source = all(item.parent() == self.source_item for item in selected_items)
+        
+        if is_from_source:
+            # --- DARI SOURCE (COPY + RENAME) ---
+            items_data = [] 
+            for item in selected_items:
+                path = item.data(0, Qt.UserRole)
+                display_name = item.text(0)
+                if path:
+                    items_data.append((path, display_name))
+            
+            try:
+                serialized_data = json.dumps(items_data)
+                mime_data.setData(self.custom_mime_type, bytearray(serialized_data, 'utf-8'))
+            except Exception as e:
+                print(f"Error serializing drag data: {e}")
+            
+            drag.setMimeData(mime_data)
+            drag.exec_(Qt.CopyAction) # Hanya boleh copy dari source
+
+        else:
+            # --- DARI TIMELINE (MOVE + COPY) ---
+            drag.setMimeData(mime_data)
+            # Izinkan Move (default) dan Copy (jika user menekan Ctrl)
+            drag.exec_(supportedActions) 
+
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        if (event.mimeData().hasUrls() or 
+            event.mimeData().hasFormat("application/x-playlist-paths") or
+            event.mimeData().hasFormat(self.custom_mime_type)):
             event.acceptProposedAction()
         else:
             super().dragEnterEvent(event)
 
     def dragMoveEvent(self, event):
+        """Menentukan apakah drop diizinkan atau tidak."""
         target_item = self.itemAt(event.pos())
-        is_valid_target = False
-
-        def is_in_timeline(item):
-            parent = item
-            while parent:
-                if parent == self.timeline_item:
-                    return True
-                parent = parent.parent()
-            return False
         
         if not target_item:
-             event.ignore()
-             return
+            event.ignore()
+            return
 
-        # --- PERBAIKAN: Terima juga MIME type kustom ---
+        # Cegah drop ke diri sendiri (ancestor check)
+        if event.source() == self and self.selectedItems():
+            dragged_item = self.selectedItems()[0]
+            check_parent = target_item
+            while check_parent:
+                if check_parent == dragged_item:
+                    event.ignore()
+                    return
+                check_parent = check_parent.parent()
+
+        # Hanya izinkan drop di timeline
+        if self._is_in_timeline_branch(target_item):
+            event.accept()
+        else:
+            event.ignore()
+                
+    def dropEvent(self, event: QDropEvent):
+        source_changed = False
+        timeline_reordered = False
+
+        target_item = self.itemAt(event.pos())
+        drop_indicator = self.dropIndicatorPosition()
+
+        # --- PERBAIKAN UTAMA: Konversi OnItem ke AboveItem untuk file ---
+        target_is_file = False
+        if target_item:
+            target_is_file = (target_item.data(0, Qt.UserRole) is not None)
+        
+        is_internal_move = (event.source() == self and 
+                            event.mimeData().hasFormat("application/x-playlist-paths"))
+
+        # Jika drag internal file dari timeline ke file lain
+        if target_is_file and drop_indicator == QAbstractItemView.OnItem and is_internal_move:
+            # Ubah dari "di atas" menjadi "di atas" agar mudah reorder
+            drop_indicator = QAbstractItemView.AboveItem
+
+        # --- Tentukan parent dan posisi sisip ---
+        parent_item = None
+        insert_index = -1
+
+        if not target_item:  # Drop di area kosong
+            if event.mimeData().hasUrls():
+                parent_item = self.source_item
+            else:
+                parent_item = self.timeline_item
+        elif drop_indicator == QAbstractItemView.AboveItem:
+            parent_item = target_item.parent()
+            insert_index = parent_item.indexOfChild(target_item)
+        elif drop_indicator == QAbstractItemView.BelowItem:
+            parent_item = target_item.parent()
+            insert_index = parent_item.indexOfChild(target_item) + 1
+        elif drop_indicator == QAbstractItemView.OnItem:
+            # Untuk folder atau item tanpa file
+            parent_item = target_item
+            insert_index = -1
+
+        # Khusus untuk root item (Source/Timeline)
+        if target_item == self.source_item or target_item == self.timeline_item:
+            parent_item = target_item
+            insert_index = -1
+
+        if not parent_item:
+            event.ignore()
+            return
+
+        # --- LOGIKA UTAMA DROP ---
+
+        # 1. File dari OS
+        if event.mimeData().hasUrls():
+            files = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
+            if files:
+                target_root = parent_item
+                if not self._is_in_timeline_branch(parent_item):
+                    target_root = self.source_item
+                self.filesDroppedOnTarget.emit(files, target_root)
+                source_changed = True
+            event.accept()
+
+        # 2. Drop dari Source (Selalu COPY ke Timeline)
+        elif event.mimeData().hasFormat(self.custom_mime_type):
+            if not self._is_in_timeline_branch(parent_item):
+                event.ignore()
+                return
+            
+            items_to_add = []
+            try:
+                serialized_data = bytes(event.mimeData().data(self.custom_mime_type)).decode('utf-8')
+                items_to_add = json.loads(serialized_data)
+            except Exception as e:
+                print(f"Error parsing custom mime data: {e}")
+                event.ignore()
+                return
+
+            for file_path, display_name in reversed(items_to_add):
+                # Cek duplikat
+                is_duplicate = any(
+                    parent_item.child(i).data(0, Qt.UserRole) == file_path
+                    for i in range(parent_item.childCount())
+                )
+                if not is_duplicate:
+                    new_item = QTreeWidgetItem([display_name])
+                    new_item.setData(0, Qt.UserRole, file_path)
+                    new_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled | Qt.ItemIsEditable)
+                    new_item.setToolTip(0, file_path)
+                    
+                    if insert_index != -1:
+                        parent_item.insertChild(insert_index, new_item)
+                    else:
+                        parent_item.addChild(new_item)
+                    
+                    source_changed = True
+                    timeline_reordered = True
+            event.accept()
+
+        # 3. Drop dari Timeline (MOVE atau COPY)
+        elif event.mimeData().hasFormat("application/x-playlist-paths"):
+            
+            if not self._is_in_timeline_branch(parent_item):
+                event.ignore()
+                return
+
+            # 3a. INTERNAL MOVE - drag dari timeline ke timeline
+            if event.source() == self and (event.possibleActions() & Qt.MoveAction):
+                items_to_move = self.selectedItems()
+                
+                for item in items_to_move:
+                    old_parent = item.parent()
+                    if not old_parent:
+                        continue
+                    
+                    # Cegah drop ke dalam diri sendiri
+                    check_anc = parent_item
+                    is_invalid = False
+                    while check_anc:
+                        if check_anc == item:
+                            is_invalid = True
+                            break
+                        check_anc = check_anc.parent()
+                    
+                    if is_invalid:
+                        continue
+
+                    # MOVE: ambil dari parent lama, masukkan ke parent baru
+                    taken_item = old_parent.takeChild(old_parent.indexOfChild(item))
+                    
+                    if insert_index != -1:
+                        parent_item.insertChild(insert_index, taken_item)
+                        insert_index += 1  # Jaga urutan jika multi-item
+                    else:
+                        parent_item.addChild(taken_item)
+
+                event.acceptProposedAction()
+                source_changed = True
+                timeline_reordered = True
+
+            # 3b. COPY - Ctrl+Drag dari timeline
+            else:
+                paths_data = event.mimeData().data("application/x-playlist-paths")
+                paths = str(paths_data, 'utf-8').split(',')
+                selected_map = {
+                    item.data(0, Qt.UserRole): item.text(0) 
+                    for item in self.selectedItems()
+                }
+
+                for file_path in reversed(paths):
+                    # Cek duplikat di parent baru
+                    is_duplicate = any(
+                        parent_item.child(i).data(0, Qt.UserRole) == file_path
+                        for i in range(parent_item.childCount())
+                    )
+                    if is_duplicate:
+                        continue
+
+                    display_name = selected_map.get(file_path, os.path.basename(file_path))
+                    new_item = QTreeWidgetItem([display_name])
+                    new_item.setData(0, Qt.UserRole, file_path)
+                    new_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled | Qt.ItemIsEditable)
+                    new_item.setToolTip(0, file_path)
+                    
+                    if insert_index != -1:
+                        parent_item.insertChild(insert_index, new_item)
+                    else:
+                        parent_item.addChild(new_item)
+                    
+                    source_changed = True
+                    timeline_reordered = True
+                
+                event.accept()
+
+        # 4. Drop folder internal
+        else:
+            super().dropEvent(event)
+            if event.isAccepted():
+                source_changed = True
+                timeline_reordered = True
+
+        # Emit sinyal
+        if source_changed:
+            self.treeChanged.emit()
+        if timeline_reordered:
+            self.timelineOrderChanged.emit()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.source_item = None
+        self.timeline_item = None
+        # --- Definisikan MIME type kustom ---
+        self.custom_mime_type = "application/x-kenae-playlist-items"
+
+    # --- FUNGSI HELPER (BANTU) ---
+    
+    def _is_in_timeline_branch(self, item):
+        """Helper: Cek apakah item adalah Timeline root atau di dalamnya."""
+        if not item: return False
+        if item == self.timeline_item: return True
+        parent = item.parent()
+        while parent:
+            if parent == self.timeline_item:
+                return True
+            parent = parent.parent()
+        return False
+
+    def _is_in_source_branch(self, item):
+        """Helper: Cek apakah item adalah Source root atau di dalamnya."""
+        if not item: return False
+        if item == self.source_item: return True
+        parent = item.parent()
+        while parent:
+            if parent == self.source_item:
+                return True
+            parent = parent.parent()
+        return False
+    
+    # --- FUNGSI DRAG/DROP UTAMA ---
+
+    def startDrag(self, supportedActions):
+        drag = QDrag(self)
+        mime_data = QMimeData()
+        
+        selected_items = self.selectedItems()
+        if not selected_items:
+            return
+
+        # --- Cek apakah ada path file yang valid untuk di-drag ---
+        paths = []
+        for item in selected_items:
+            path = item.data(0, Qt.UserRole)
+            if path:
+                paths.append(path)
+        
+        # Jika tidak ada path (misal folder), biarkan super() menangani drag internal
+        if not paths:
+            super().startDrag(supportedActions)
+            return
+
+        # --- ADA PATH, jadi kita buat MIME data ---
+        
+        # 1. Set data standar untuk player (selalu)
+        mime_data.setData("application/x-playlist-paths", bytearray(",".join(paths), 'utf-8'))
+
+        # 2. Cek apakah dari Source untuk data rename kustom
+        is_from_source = all(item.parent() == self.source_item for item in selected_items)
+        
+        if is_from_source:
+            # --- DARI SOURCE (COPY + RENAME) ---
+            items_data = [] 
+            for item in selected_items:
+                path = item.data(0, Qt.UserRole)
+                display_name = item.text(0)
+                if path:
+                    items_data.append((path, display_name))
+            
+            try:
+                serialized_data = json.dumps(items_data)
+                mime_data.setData(self.custom_mime_type, bytearray(serialized_data, 'utf-8'))
+            except Exception as e:
+                print(f"Error serializing drag data: {e}")
+            
+            drag.setMimeData(mime_data)
+            drag.exec_(Qt.CopyAction) # Hanya boleh copy dari source
+
+        else:
+            # --- DARI TIMELINE (MOVE + COPY) ---
+            drag.setMimeData(mime_data)
+            # Izinkan Move (default) dan Copy (jika user menekan Ctrl)
+            drag.exec_(supportedActions) 
+
+    def dragEnterEvent(self, event: QDragEnterEvent):
         if (event.mimeData().hasUrls() or 
             event.mimeData().hasFormat("application/x-playlist-paths") or
             event.mimeData().hasFormat(self.custom_mime_type)):
-        # --- AKHIR PERBAIKAN ---
-            # Cek jika target adalah 'Timeline' atau di dalam 'Timeline'
-            if (target_item == self.timeline_item or is_in_timeline(target_item)):
-                 is_valid_target = True
-            # Izinkan drop file OS ke 'Source' juga
-            elif (target_item == self.source_item or target_item.parent() == self.source_item) and event.mimeData().hasUrls():
-                 is_valid_target = True
-        
-        elif is_in_timeline(target_item):
-             # Ini untuk InternalMove di dalam timeline
-             is_valid_target = True
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
 
-        # Mencegah drop folder ke dalam dirinya sendiri (untuk InternalMove)
+    # (Di dalam kelas ProjectTreeWidget)
+
+    def dragMoveEvent(self, event):
+        target_item = self.itemAt(event.pos())
+        is_valid_target = False # Default-nya jangan izinkan
+
+        if not target_item:
+             event.ignore(); return
+
+        # --- 1. Cek Drop ke Diri Sendiri ---
         if event.source() == self and self.selectedItems():
             dragged_item = self.selectedItems()[0]
-            if target_item:
-                parent = target_item
-                while parent:
-                    if parent == dragged_item:
-                        is_valid_target = False
-                        break
-                    parent = parent.parent()
+            check_parent = target_item
+            while check_parent:
+                if check_parent == dragged_item:
+                    event.ignore(); return # Tolak
+                check_parent = check_parent.parent()
+
+        # --- 2. Cek Aksi Utama ---
         
+        # Cek apakah kita drag file
+        is_dragging_file = (event.mimeData().hasUrls() or 
+                            event.mimeData().hasFormat(self.custom_mime_type) or
+                            event.mimeData().hasFormat("application/x-playlist-paths"))
+        
+        # Cek apakah kita drag folder (internal)
+        is_dragging_folder = (event.source() == self and not is_dragging_file)
+
+        # Cek target
+        target_in_timeline = self._is_in_timeline_branch(target_item)
+        target_in_source = self._is_in_source_branch(target_item)
+
+        # --- 3. Logika Izin Drop ---
+
+        if is_dragging_file:
+            # 3a. Drag file ke Source (hanya OS)
+            if target_in_source and event.mimeData().hasUrls():
+                is_valid_target = True
+            
+            # 3b. Drag file ke Timeline (Izinkan semua, dropEvent akan urus)
+            elif target_in_timeline:
+                is_valid_target = True # <-- INI PERUBAHANNYA
+
+        elif is_dragging_folder:
+            # 3c. Drag folder (hanya reorder internal)
+            if target_in_timeline or target_in_source:
+                is_valid_target = True
+
+        # --- 4. Finalisasi ---
         if is_valid_target:
             event.accept()
         else:
             event.ignore()
             
     def dropEvent(self, event: QDropEvent):
-            source_changed = False
-            timeline_reordered = False
+        source_changed = False
+        timeline_reordered = False
 
-            # --- HELPER FUNCTIONS (Fungsi Bantuan) ---
-            def is_drop_in_timeline(target):
-                """Cek apakah target adalah Timeline atau di dalam Timeline."""
-                if not target: return False
-                if target == self.timeline_item: return True
-                parent = target.parent()
-                while parent:
-                    if parent == self.timeline_item: return True
-                    parent = parent.parent()
-                return False
-                
-            def is_drop_in_source(target):
-                """Cek apakah target adalah Source atau di dalam Source."""
-                if not target: return False
-                if target == self.source_item: return True
-                parent = target.parent()
-                while parent:
-                    if parent == self.source_item: return True
-                    parent = parent.parent()
-                return False
-            # --- AKHIR HELPER ---
+        target_item = self.itemAt(event.pos())
+        drop_indicator = self.dropIndicatorPosition()
 
-            target_item = self.itemAt(event.pos())
-            drop_indicator = self.dropIndicatorPosition()
-            parent_item = None
+        # --- LOGIKA BARU: Mengubah drop "OnItem" pada file ---
+        target_is_file = False
+        if target_item:
+            target_is_file = (target_item.data(0, Qt.UserRole) is not None)
+        
+        if target_is_file and drop_indicator == QAbstractItemView.OnItem:
+            # Jika drop "DI ATAS" file video,
+            # ubah perilakunya menjadi "DI ANTARA" (AboveItem)
+            # Ini adalah inti dari permintaan Anda "supaya mudah"
+            drop_indicator = QAbstractItemView.AboveItem
+        # --- AKHIR LOGIKA BARU ---
+
+        # Tentukan target drop (parent) dan posisi (index)
+        parent_item = None
+        insert_index = -1
+
+        if not target_item: # Drop di area kosong
+            if event.mimeData().hasUrls():
+                parent_item = self.source_item 
+            else:
+                parent_item = self.timeline_item
+        elif drop_indicator == QAbstractItemView.AboveItem:
+            parent_item = target_item.parent()
+            insert_index = parent_item.indexOfChild(target_item)
+        elif drop_indicator == QAbstractItemView.BelowItem:
+            parent_item = target_item.parent()
+            insert_index = parent_item.indexOfChild(target_item) + 1
+        elif drop_indicator == QAbstractItemView.OnItem:
+            # Ini sekarang HANYA akan terjadi pada FOLDER
+            parent_item = target_item 
+            insert_index = -1
+        
+        if target_item == self.source_item or target_item == self.timeline_item:
+            parent_item = target_item
             insert_index = -1
 
-            # Tentukan parent item (target drop)
-            if not target_item: # Drop di area kosong
-                if event.mimeData().hasUrls():
-                    parent_item = self.source_item # File OS default ke Source
-                else:
-                    parent_item = self.timeline_item # Item tree default ke Timeline
-            elif drop_indicator == QAbstractItemView.AboveItem:
-                parent_item = target_item.parent()
-                insert_index = parent_item.indexOfChild(target_item)
-            elif drop_indicator == QAbstractItemView.BelowItem:
-                parent_item = target_item.parent()
-                insert_index = parent_item.indexOfChild(target_item) + 1
-            elif drop_indicator == QAbstractItemView.OnItem:
-                parent_item = target_item
-                insert_index = -1
+        if not parent_item:
+            event.ignore()
+            return
+
+        # --- LOGIKA DROP (Sama seperti sebelumnya) ---
+
+        # 1. File dari OS
+        if event.mimeData().hasUrls():
+            files = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
+            if files:
+                target_root = parent_item
+                if not (self._is_in_timeline_branch(parent_item)):
+                     target_root = self.source_item 
+                     
+                self.filesDroppedOnTarget.emit(files, target_root)
+                source_changed = True
+            event.accept()
+
+        # 2. Drop dari Source (dengan data rename) -> Selalu COPY
+        elif event.mimeData().hasFormat(self.custom_mime_type):
+            if not self._is_in_timeline_branch(parent_item):
+                event.ignore(); return
             
-            # Jika drop ke item root (Source/Timeline), anggap drop 'OnItem'
-            if target_item == self.source_item or target_item == self.timeline_item:
-                parent_item = target_item
-                insert_index = -1
+            items_to_add = []
+            try:
+                serialized_data = bytes(event.mimeData().data(self.custom_mime_type)).decode('utf-8')
+                items_to_add = json.loads(serialized_data)
+            except Exception as e:
+                print(f"Error parsing custom mime data: {e}"); event.ignore(); return
 
-            if not parent_item:
-                event.ignore()
-                return
-
-            # --- 1. File dari OS (Windows Explorer) ---
-            if event.mimeData().hasUrls():
-                files = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
-                if files:
-                    target_root = parent_item
+            for file_path, display_name in reversed(items_to_add):
+                is_duplicate = False
+                for i in range(parent_item.childCount()):
+                    if parent_item.child(i).data(0, Qt.UserRole) == file_path:
+                        is_duplicate = True; break
+                if not is_duplicate:
+                    new_item = QTreeWidgetItem([display_name])
+                    new_item.setData(0, Qt.UserRole, file_path)
+                    new_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled | Qt.ItemIsEditable)
+                    new_item.setToolTip(0, file_path)
                     
-                    # --- PERBAIKAN: Tentukan target drop yg benar ---
-                    if is_drop_in_timeline(target_root):
-                        pass # Target sudah benar (di dalam timeline)
-                    elif is_drop_in_source(target_root):
-                        target_root = self.source_item # Normalisasi ke root Source
+                    if insert_index != -1:
+                        parent_item.insertChild(insert_index, new_item)
                     else:
-                        # Jika tidak jelas, default ke Source
-                        target_root = self.source_item
-                    # --- AKHIR PERBAIKAN ---
-
-                    self.filesDroppedOnTarget.emit(files, target_root)
+                        parent_item.addChild(new_item)
                     source_changed = True
-                event.accept()
+                    timeline_reordered = True
+            event.accept()
 
-            # --- 2. Drop dari Source (dengan data rename) -> Selalu COPY ---
-            elif event.mimeData().hasFormat(self.custom_mime_type):
-                
-                if not is_drop_in_timeline(parent_item): # Hanya boleh drop ke timeline
-                    event.ignore()
-                    return
-                
-                items_to_add = []
-                try:
-                    serialized_data = bytes(event.mimeData().data(self.custom_mime_type)).decode('utf-8')
-                    items_to_add = json.loads(serialized_data)
-                except Exception as e:
-                    print(f"Error parsing custom mime data: {e}")
-                    event.ignore()
-                    return
+        # 3. Drop dari Timeline (Move atau Copy)
+        elif event.mimeData().hasFormat("application/x-playlist-paths"):
+            
+            if not self._is_in_timeline_branch(parent_item):
+                event.ignore(); return
 
-                for file_path, display_name in reversed(items_to_add):
+            # 3a. INTERNAL MOVE (dari Timeline ke Timeline)
+            if event.source() == self and (event.possibleActions() & Qt.MoveAction) and (event.dropAction() == Qt.MoveAction):
+                items_to_move = self.selectedItems()
+                for item in items_to_move:
+                    old_parent = item.parent()
+                    if not old_parent: continue
+                    
+                    check_anc = parent_item
+                    is_invalid_drop = False
+                    while check_anc:
+                        if check_anc == item: is_invalid_drop = True; break
+                        check_anc = check_anc.parent()
+                    if is_invalid_drop: continue
+
+                    taken_item = old_parent.takeChild(old_parent.indexOfChild(item))
+                    
+                    if insert_index != -1:
+                        parent_item.insertChild(insert_index, taken_item)
+                        insert_index += 1 # Jaga urutan jika > 1 item
+                    else:
+                        parent_item.addChild(taken_item)
+
+                event.acceptProposedAction() 
+                source_changed = True
+                timeline_reordered = True
+
+            # 3b. COPY (dari Timeline/Ctrl+Drag)
+            else: 
+                paths_data = event.mimeData().data("application/x-playlist-paths")
+                paths = str(paths_data, 'utf-8').split(',')
+                selected_map = {}
+                if event.source() == self:
+                    selected_map = {item.data(0, Qt.UserRole): item.text(0) for item in self.selectedItems()}
+
+                for file_path in reversed(paths):
                     is_duplicate = False
                     for i in range(parent_item.childCount()):
                         if parent_item.child(i).data(0, Qt.UserRole) == file_path:
                             is_duplicate = True; break
-                    if is_duplicate: continue
+                    if is_duplicate: continue 
+
+                    display_name = selected_map.get(file_path, os.path.basename(file_path))
+                    new_item = QTreeWidgetItem([display_name])
+                    new_item.setData(0, Qt.UserRole, file_path)
+                    new_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled | Qt.ItemIsEditable)
+                    new_item.setToolTip(0, file_path)
                     
+                    if insert_index != -1:
+                        parent_item.insertChild(insert_index, new_item)
+                    else:
+                        parent_item.addChild(new_item)
+                    
+                    source_changed = True
+                    timeline_reordered = True
+                event.accept()
+
+        # 4. Drop folder internal (dari super().startDrag())
+        else:
+            # Ini akan menangani reorder folder di Source dan Timeline
+            super().dropEvent(event)
+            if event.isAccepted():
+                source_changed = True
+                timeline_reordered = True
+        
+        if source_changed:
+            self.treeChanged.emit()
+        if timeline_reordered:
+            self.timelineOrderChanged.emit()
+    filesDroppedOnTarget = pyqtSignal(list, object)
+    treeChanged = pyqtSignal()
+    timelineOrderChanged = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.source_item = None
+        self.timeline_item = None
+        # --- Definisikan MIME type kustom ---
+        self.custom_mime_type = "application/x-kenae-playlist-items"
+
+    # --- FUNGSI HELPER (BANTU) ---
+    
+    def _is_in_timeline_branch(self, item):
+        """Helper: Cek apakah item adalah Timeline root atau di dalamnya."""
+        if not item: return False
+        if item == self.timeline_item: return True
+        parent = item.parent()
+        while parent:
+            if parent == self.timeline_item:
+                return True
+            parent = parent.parent()
+        return False
+
+    def _is_in_source_branch(self, item):
+        """Helper: Cek apakah item adalah Source root atau di dalamnya."""
+        if not item: return False
+        if item == self.source_item: return True
+        parent = item.parent()
+        while parent:
+            if parent == self.source_item:
+                return True
+            parent = parent.parent()
+        return False
+    
+    # --- FUNGSI DRAG/DROP UTAMA ---
+
+    def startDrag(self, supportedActions):
+        drag = QDrag(self)
+        mime_data = QMimeData()
+        
+        selected_items = self.selectedItems()
+        if not selected_items:
+            return
+
+        # --- Cek apakah ada path file yang valid untuk di-drag ---
+        paths = []
+        for item in selected_items:
+            path = item.data(0, Qt.UserRole)
+            if path:
+                paths.append(path)
+        
+        # Jika tidak ada path (misal folder), biarkan super() menangani drag internal
+        if not paths:
+            super().startDrag(supportedActions)
+            return
+
+        # --- ADA PATH, jadi kita buat MIME data ---
+        
+        # 1. Set data standar untuk player (selalu)
+        mime_data.setData("application/x-playlist-paths", bytearray(",".join(paths), 'utf-8'))
+
+        # 2. Cek apakah dari Source untuk data rename kustom
+        is_from_source = all(item.parent() == self.source_item for item in selected_items)
+        
+        if is_from_source:
+            # --- DARI SOURCE (COPY + RENAME) ---
+            items_data = [] 
+            for item in selected_items:
+                path = item.data(0, Qt.UserRole)
+                display_name = item.text(0)
+                if path:
+                    items_data.append((path, display_name))
+            
+            try:
+                serialized_data = json.dumps(items_data)
+                mime_data.setData(self.custom_mime_type, bytearray(serialized_data, 'utf-8'))
+            except Exception as e:
+                print(f"Error serializing drag data: {e}")
+            
+            drag.setMimeData(mime_data)
+            drag.exec_(Qt.CopyAction) # Hanya boleh copy dari source
+
+        else:
+            # --- DARI TIMELINE (MOVE + COPY) ---
+            drag.setMimeData(mime_data)
+            # Izinkan Move (default) dan Copy (jika user menekan Ctrl)
+            drag.exec_(supportedActions) 
+
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        if (event.mimeData().hasUrls() or 
+            event.mimeData().hasFormat("application/x-playlist-paths") or
+            event.mimeData().hasFormat(self.custom_mime_type)):
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        target_item = self.itemAt(event.pos())
+        is_valid_target = False # Default to false
+
+        if not target_item:
+             event.ignore(); return
+
+        # --- 1. Cek Drop ke Diri Sendiri ---
+        if event.source() == self and self.selectedItems():
+            dragged_item = self.selectedItems()[0]
+            check_parent = target_item
+            while check_parent:
+                if check_parent == dragged_item:
+                    event.ignore(); return # Tolak
+                check_parent = check_parent.parent()
+
+        # --- 2. Cek Aksi Utama ---
+        
+        # Cek apakah kita drag file
+        is_dragging_file = (event.mimeData().hasUrls() or 
+                            event.mimeData().hasFormat(self.custom_mime_type) or
+                            event.mimeData().hasFormat("application/x-playlist-paths"))
+        
+        # Cek apakah kita drag folder (internal)
+        is_dragging_folder = (event.source() == self and not is_dragging_file)
+
+        # Cek target
+        target_in_timeline = self._is_in_timeline_branch(target_item)
+        target_in_source = self._is_in_source_branch(target_item)
+
+        # --- 3. Logika Izin Drop ---
+
+        if is_dragging_file:
+            # 3a. Drag file ke Source (hanya OS)
+            if target_in_source and event.mimeData().hasUrls():
+                is_valid_target = True
+            
+            # 3b. Drag file ke Timeline
+            # (Kita izinkan semua drop di sini, logika akan ditangani di dropEvent)
+            elif target_in_timeline:
+                is_valid_target = True
+
+        elif is_dragging_folder:
+            # 3c. Drag folder (hanya reorder internal)
+            if target_in_timeline or target_in_source:
+                is_valid_target = True
+
+        # --- 4. Finalisasi ---
+        if is_valid_target:
+            event.accept()
+        else:
+            event.ignore()
+            
+    def dropEvent(self, event: QDropEvent):
+        source_changed = False
+        timeline_reordered = False
+
+        target_item = self.itemAt(event.pos())
+        drop_indicator = self.dropIndicatorPosition()
+
+        # --- LOGIKA BARU: Mengubah drop "OnItem" pada file ---
+        target_is_file = False
+        if target_item:
+            target_is_file = (target_item.data(0, Qt.UserRole) is not None)
+        
+        if target_is_file and drop_indicator == QAbstractItemView.OnItem:
+            # Jika drop "DI ATAS" file video,
+            # ubah perilakunya menjadi "DI ANTARA" (AboveItem)
+            # Ini adalah inti dari permintaan Anda "supaya mudah"
+            drop_indicator = QAbstractItemView.AboveItem
+        # --- AKHIR LOGIKA BARU ---
+
+        # Tentukan target drop (parent) dan posisi (index)
+        parent_item = None
+        insert_index = -1
+
+        if not target_item: # Drop di area kosong
+            if event.mimeData().hasUrls():
+                parent_item = self.source_item 
+            else:
+                parent_item = self.timeline_item
+        elif drop_indicator == QAbstractItemView.AboveItem:
+            parent_item = target_item.parent()
+            insert_index = parent_item.indexOfChild(target_item)
+        elif drop_indicator == QAbstractItemView.BelowItem:
+            parent_item = target_item.parent()
+            insert_index = parent_item.indexOfChild(target_item) + 1
+        elif drop_indicator == QAbstractItemView.OnItem:
+            # Ini sekarang HANYA akan terjadi pada FOLDER
+            parent_item = target_item 
+            insert_index = -1
+        
+        if target_item == self.source_item or target_item == self.timeline_item:
+            parent_item = target_item
+            insert_index = -1
+
+        if not parent_item:
+            event.ignore()
+            return
+
+        # --- LOGIKA DROP (Sama seperti sebelumnya) ---
+
+        # 1. File dari OS
+        if event.mimeData().hasUrls():
+            files = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
+            if files:
+                target_root = parent_item
+                # Pengecekan sederhana: jika bukan timeline, paksa ke source
+                if not (self._is_in_timeline_branch(parent_item)):
+                     target_root = self.source_item 
+                     
+                self.filesDroppedOnTarget.emit(files, target_root)
+                source_changed = True
+            event.accept()
+
+        # 2. Drop dari Source (dengan data rename) -> Selalu COPY
+        elif event.mimeData().hasFormat(self.custom_mime_type):
+            if not self._is_in_timeline_branch(parent_item):
+                event.ignore(); return
+            
+            items_to_add = []
+            try:
+                serialized_data = bytes(event.mimeData().data(self.custom_mime_type)).decode('utf-8')
+                items_to_add = json.loads(serialized_data)
+            except Exception as e:
+                print(f"Error parsing custom mime data: {e}"); event.ignore(); return
+
+            for file_path, display_name in reversed(items_to_add):
+                is_duplicate = False
+                for i in range(parent_item.childCount()):
+                    if parent_item.child(i).data(0, Qt.UserRole) == file_path:
+                        is_duplicate = True; break
+                if not is_duplicate:
+                    new_item = QTreeWidgetItem([display_name])
+                    new_item.setData(0, Qt.UserRole, file_path)
+                    new_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled | Qt.ItemIsEditable)
+                    new_item.setToolTip(0, file_path)
+                    
+                    if insert_index != -1:
+                        parent_item.insertChild(insert_index, new_item)
+                    else:
+                        parent_item.addChild(new_item)
+                    source_changed = True
+                    timeline_reordered = True
+            event.accept()
+
+        # 3. Drop dari Timeline (Move atau Copy)
+        elif event.mimeData().hasFormat("application/x-playlist-paths"):
+            
+            if not self._is_in_timeline_branch(parent_item):
+                event.ignore(); return
+
+            # 3a. INTERNAL MOVE (dari Timeline ke Timeline)
+            if event.source() == self and (event.possibleActions() & Qt.MoveAction) and (event.dropAction() == Qt.MoveAction):
+                items_to_move = self.selectedItems()
+                for item in items_to_move:
+                    old_parent = item.parent()
+                    if not old_parent: continue
+                    
+                    check_anc = parent_item
+                    is_invalid_drop = False
+                    while check_anc:
+                        if check_anc == item: is_invalid_drop = True; break
+                        check_anc = check_anc.parent()
+                    if is_invalid_drop: continue
+
+                    taken_item = old_parent.takeChild(old_parent.indexOfChild(item))
+                    
+                    if insert_index != -1:
+                        parent_item.insertChild(insert_index, taken_item)
+                        insert_index += 1 # Jaga urutan jika > 1 item
+                    else:
+                        parent_item.addChild(taken_item)
+
+                event.acceptProposedAction() 
+                source_changed = True
+                timeline_reordered = True
+
+            # 3b. COPY (dari Timeline/Ctrl+Drag)
+            else: 
+                paths_data = event.mimeData().data("application/x-playlist-paths")
+                paths = str(paths_data, 'utf-8').split(',')
+                selected_map = {}
+                if event.source() == self:
+                    selected_map = {item.data(0, Qt.UserRole): item.text(0) for item in self.selectedItems()}
+
+                for file_path in reversed(paths):
+                    is_duplicate = False
+                    for i in range(parent_item.childCount()):
+                        if parent_item.child(i).data(0, Qt.UserRole) == file_path:
+                            is_duplicate = True; break
+                    if is_duplicate: continue 
+
+                    display_name = selected_map.get(file_path, os.path.basename(file_path))
+                    new_item = QTreeWidgetItem([display_name])
+                    new_item.setData(0, Qt.UserRole, file_path)
+                    new_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled | Qt.ItemIsEditable)
+                    new_item.setToolTip(0, file_path)
+                    
+                    if insert_index != -1:
+                        parent_item.insertChild(insert_index, new_item)
+                    else:
+                        parent_item.addChild(new_item)
+                    
+                    source_changed = True
+                    timeline_reordered = True
+                event.accept()
+
+        # 4. Drop folder internal (dari super().startDrag())
+        else:
+            # Ini akan menangani reorder folder di Source dan Timeline
+            super().dropEvent(event)
+            if event.isAccepted():
+                source_changed = True
+                timeline_reordered = True
+        
+        if source_changed:
+            self.treeChanged.emit()
+        if timeline_reordered:
+            self.timelineOrderChanged.emit()
+    filesDroppedOnTarget = pyqtSignal(list, object)
+    treeChanged = pyqtSignal()
+    timelineOrderChanged = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.source_item = None
+        self.timeline_item = None
+        # --- Definisikan MIME type kustom ---
+        self.custom_mime_type = "application/x-kenae-playlist-items"
+
+    # --- FUNGSI HELPER (BANTU) ---
+    
+    def _is_in_timeline_branch(self, item):
+        """Helper: Cek apakah item adalah Timeline root atau di dalamnya."""
+        if not item: return False
+        if item == self.timeline_item: return True
+        parent = item.parent()
+        while parent:
+            if parent == self.timeline_item:
+                return True
+            parent = parent.parent()
+        return False
+
+    def _is_in_source_branch(self, item):
+        """Helper: Cek apakah item adalah Source root atau di dalamnya."""
+        if not item: return False
+        if item == self.source_item: return True
+        parent = item.parent()
+        while parent:
+            if parent == self.source_item:
+                return True
+            parent = parent.parent()
+        return False
+    
+    # --- FUNGSI DRAG/DROP UTAMA ---
+
+    def startDrag(self, supportedActions):
+        drag = QDrag(self)
+        mime_data = QMimeData()
+        
+        selected_items = self.selectedItems()
+        if not selected_items:
+            return
+
+        # --- Cek apakah ada path file yang valid untuk di-drag ---
+        paths = []
+        for item in selected_items:
+            path = item.data(0, Qt.UserRole)
+            if path:
+                paths.append(path)
+        
+        # Jika tidak ada path (misal folder), biarkan super() menangani drag internal
+        if not paths:
+            super().startDrag(supportedActions)
+            return
+
+        # --- ADA PATH, jadi kita buat MIME data ---
+        
+        # 1. Set data standar untuk player (selalu)
+        mime_data.setData("application/x-playlist-paths", bytearray(",".join(paths), 'utf-8'))
+
+        # 2. Cek apakah dari Source untuk data rename kustom
+        is_from_source = all(item.parent() == self.source_item for item in selected_items)
+        
+        if is_from_source:
+            # --- DARI SOURCE (COPY + RENAME) ---
+            items_data = [] 
+            for item in selected_items:
+                path = item.data(0, Qt.UserRole)
+                display_name = item.text(0)
+                if path:
+                    items_data.append((path, display_name))
+            
+            try:
+                serialized_data = json.dumps(items_data)
+                mime_data.setData(self.custom_mime_type, bytearray(serialized_data, 'utf-8'))
+            except Exception as e:
+                print(f"Error serializing drag data: {e}")
+            
+            drag.setMimeData(mime_data)
+            drag.exec_(Qt.CopyAction) # Hanya boleh copy dari source
+
+        else:
+            # --- DARI TIMELINE (MOVE + COPY) ---
+            drag.setMimeData(mime_data)
+            # Izinkan Move (default) dan Copy (jika user menekan Ctrl)
+            drag.exec_(supportedActions) 
+
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        if (event.mimeData().hasUrls() or 
+            event.mimeData().hasFormat("application/x-playlist-paths") or
+            event.mimeData().hasFormat(self.custom_mime_type)):
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    # (Di dalam kelas ProjectTreeWidget)
+
+    def dragMoveEvent(self, event):
+        target_item = self.itemAt(event.pos())
+        is_valid_target = False # Default-nya jangan izinkan
+
+        if not target_item:
+             event.ignore(); return
+
+        # --- 1. Cek Drop ke Diri Sendiri ---
+        if event.source() == self and self.selectedItems():
+            dragged_item = self.selectedItems()[0]
+            check_parent = target_item
+            while check_parent:
+                if check_parent == dragged_item:
+                    event.ignore(); return # Tolak
+                check_parent = check_parent.parent()
+
+        # --- 2. Cek Aksi Utama ---
+        
+        # Cek apakah kita drag file
+        is_dragging_file = (event.mimeData().hasUrls() or 
+                            event.mimeData().hasFormat(self.custom_mime_type) or
+                            event.mimeData().hasFormat("application/x-playlist-paths"))
+        
+        # Cek apakah kita drag folder (internal)
+        is_dragging_folder = (event.source() == self and not is_dragging_file)
+
+        # Cek target
+        target_in_timeline = self._is_in_timeline_branch(target_item)
+        target_in_source = self._is_in_source_branch(target_item)
+
+        # --- 3. Logika Izin Drop (TANPA REORDER) ---
+
+        if is_dragging_file:
+            # 3a. Drag file ke Source (hanya OS)
+            if target_in_source and event.mimeData().hasUrls():
+                is_valid_target = True
+            
+            # 3b. Drag file DARI SOURCE/OS ke Timeline
+            # (event.source() == self DIBLOKIR)
+            elif target_in_timeline and not (event.source() == self):
+                is_valid_target = True # Izinkan drop DARI LUAR
+
+        elif is_dragging_folder:
+            # 3c. Drag folder (hanya reorder internal di Source)
+            if target_in_source:
+                is_valid_target = True
+        
+        # (Logika untuk 'internal move' di timeline sengaja DIHILANGKAN)
+
+        # --- 4. Finalisasi ---
+        if is_valid_target:
+            event.accept()
+        else:
+            event.ignore()
+            
+    def dropEvent(self, event: QDropEvent):
+        source_changed = False
+        timeline_reordered = False # Akan selalu False
+
+        target_item = self.itemAt(event.pos())
+        drop_indicator = self.dropIndicatorPosition()
+
+        # --- TIDAK ADA LOGIKA UBAH URUTAN ---
+        # (Logika "OnItem" menjadi "AboveItem" DIHAPUS)
+
+        # Tentukan target drop (parent) dan posisi (index)
+        parent_item = None
+        insert_index = -1
+
+        if not target_item: # Drop di area kosong
+            if event.mimeData().hasUrls():
+                parent_item = self.source_item 
+            else:
+                parent_item = self.timeline_item
+        elif drop_indicator == QAbstractItemView.AboveItem:
+            parent_item = target_item.parent()
+            insert_index = parent_item.indexOfChild(target_item)
+        elif drop_indicator == QAbstractItemView.BelowItem:
+            parent_item = target_item.parent()
+            insert_index = parent_item.indexOfChild(target_item) + 1
+        elif drop_indicator == QAbstractItemView.OnItem:
+            parent_item = target_item 
+            insert_index = -1
+        
+        if target_item == self.source_item or target_item == self.timeline_item:
+            parent_item = target_item
+            insert_index = -1
+
+        if not parent_item:
+            event.ignore(); return
+
+        # --- LOGIKA DROP ---
+
+        # 1. File dari OS
+        if event.mimeData().hasUrls():
+            files = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
+            if files:
+                target_root = parent_item
+                if not (self._is_in_timeline_branch(parent_item)):
+                     target_root = self.source_item 
+                     
+                self.filesDroppedOnTarget.emit(files, target_root)
+                source_changed = True
+            event.accept()
+
+        # 2. Drop dari Source (dengan data rename) -> Selalu COPY
+        elif event.mimeData().hasFormat(self.custom_mime_type):
+            if not self._is_in_timeline_branch(parent_item):
+                event.ignore(); return
+            
+            items_to_add = []
+            try:
+                serialized_data = bytes(event.mimeData().data(self.custom_mime_type)).decode('utf-8')
+                items_to_add = json.loads(serialized_data)
+            except Exception as e:
+                print(f"Error parsing custom mime data: {e}"); event.ignore(); return
+
+            for file_path, display_name in reversed(items_to_add):
+                is_duplicate = False
+                for i in range(parent_item.childCount()):
+                    if parent_item.child(i).data(0, Qt.UserRole) == file_path:
+                        is_duplicate = True; break
+                if not is_duplicate:
+                    new_item = QTreeWidgetItem([display_name])
+                    new_item.setData(0, Qt.UserRole, file_path)
+                    new_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled | Qt.ItemIsEditable)
+                    new_item.setToolTip(0, file_path)
+                    
+                    if insert_index != -1:
+                        parent_item.insertChild(insert_index, new_item)
+                    else:
+                        parent_item.addChild(new_item)
+                    source_changed = True
+            event.accept()
+
+        # 3. Drop dari Timeline (HANYA COPY)
+        elif event.mimeData().hasFormat("application/x-playlist-paths"):
+            
+            if not self._is_in_timeline_branch(parent_item):
+                event.ignore(); return
+
+            # 3a. INTERNAL MOVE (DIHAPUS)
+
+            # 3b. COPY (dari Timeline/Ctrl+Drag)
+            if event.source() == self and (event.dropAction() == Qt.CopyAction):
+                paths_data = event.mimeData().data("application/x-playlist-paths")
+                paths = str(paths_data, 'utf-8').split(',')
+                selected_map = {}
+                if event.source() == self:
+                    selected_map = {item.data(0, Qt.UserRole): item.text(0) for item in self.selectedItems()}
+
+                for file_path in reversed(paths):
+                    is_duplicate = False
+                    for i in range(parent_item.childCount()):
+                        if parent_item.child(i).data(0, Qt.UserRole) == file_path:
+                            is_duplicate = True; break
+                    if is_duplicate: continue 
+
+                    display_name = selected_map.get(file_path, os.path.basename(file_path))
+                    new_item = QTreeWidgetItem([display_name])
+                    new_item.setData(0, Qt.UserRole, file_path)
+                    new_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled | Qt.ItemIsEditable)
+                    new_item.setToolTip(0, file_path)
+                    
+                    if insert_index != -1:
+                        parent_item.insertChild(insert_index, new_item)
+                    else:
+                        parent_item.addChild(new_item)
+                    
+                    source_changed = True
+                event.accept()
+            else:
+                # Ini adalah 'move' yang tidak lagi kita dukung
+                event.ignore()
+
+        # 4. Drop folder internal (dari super().startDrag())
+        else:
+            # Hanya izinkan reorder folder di Source
+            if event.source() == self and self._is_in_source_branch(parent_item):
+                super().dropEvent(event)
+                if event.isAccepted():
+                    source_changed = True
+            else:
+                event.ignore()
+        
+        if source_changed:
+            self.treeChanged.emit()
+        # Sinyal timelineOrderChanged tidak akan terpicu
+    
+    def _is_in_timeline_branch(self, item):
+        """Helper: Cek apakah item adalah Timeline root atau di dalamnya."""
+        if not item: return False
+        if item == self.timeline_item: return True
+        parent = item.parent()
+        while parent:
+            if parent == self.timeline_item:
+                return True
+            parent = parent.parent()
+        return False
+
+    def _is_in_source_branch(self, item):
+        """Helper: Cek apakah item adalah Source root atau di dalamnya."""
+        if not item: return False
+        if item == self.source_item: return True
+        parent = item.parent()
+        while parent:
+            if parent == self.source_item:
+                return True
+            parent = parent.parent()
+        return False
+    
+    # --- FUNGSI DRAG/DROP ---
+
+    def startDrag(self, supportedActions):
+        drag = QDrag(self)
+        mime_data = QMimeData()
+        
+        selected_items = self.selectedItems()
+        if not selected_items:
+            return
+
+        # --- Cek apakah ada path file yang valid untuk di-drag ---
+        paths = []
+        for item in selected_items:
+            path = item.data(0, Qt.UserRole)
+            if path:
+                paths.append(path)
+        
+        # Jika tidak ada path (misal folder), biarkan super() menangani drag internal
+        if not paths:
+            super().startDrag(supportedActions)
+            return
+
+        # --- ADA PATH, jadi kita buat MIME data ---
+        
+        # 1. Set data standar untuk player (selalu)
+        mime_data.setData("application/x-playlist-paths", bytearray(",".join(paths), 'utf-8'))
+
+        # 2. Cek apakah dari Source untuk data rename kustom
+        is_from_source = all(item.parent() == self.source_item for item in selected_items)
+        
+        if is_from_source:
+            # --- DARI SOURCE (COPY + RENAME) ---
+            items_data = [] 
+            for item in selected_items:
+                path = item.data(0, Qt.UserRole)
+                display_name = item.text(0)
+                if path:
+                    items_data.append((path, display_name))
+            
+            try:
+                serialized_data = json.dumps(items_data)
+                mime_data.setData(self.custom_mime_type, bytearray(serialized_data, 'utf-8'))
+            except Exception as e:
+                print(f"Error serializing drag data: {e}")
+            
+            drag.setMimeData(mime_data)
+            drag.exec_(Qt.CopyAction) # Hanya boleh copy dari source
+
+        else:
+            # --- DARI TIMELINE (MOVE + COPY) ---
+            drag.setMimeData(mime_data)
+            # Izinkan Move (default) dan Copy (jika user menekan Ctrl)
+            drag.exec_(supportedActions) 
+
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        if (event.mimeData().hasUrls() or 
+            event.mimeData().hasFormat("application/x-playlist-paths") or
+            event.mimeData().hasFormat(self.custom_mime_type)):
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        target_item = self.itemAt(event.pos())
+        
+        # --- Helper Functions (Lokal) ---
+        def is_in_timeline(item):
+            if not item: return False
+            if item == self.timeline_item: return True
+            parent = item.parent()
+            while parent:
+                if parent == self.timeline_item:
+                    return True
+                parent = parent.parent()
+            return False
+            
+        def is_in_source(item):
+            if not item: return False
+            if item == self.source_item: return True
+            parent = item.parent()
+            while parent:
+                if parent == self.source_item:
+                    return True
+                parent = parent.parent()
+            return False
+        # --- End Helpers ---
+
+        if not target_item:
+             event.ignore(); return
+
+        # --- Dapatkan Info Drag ---
+        is_dragging_file = (event.mimeData().hasUrls() or 
+                            event.mimeData().hasFormat(self.custom_mime_type) or
+                            event.mimeData().hasFormat("application/x-playlist-paths"))
+        
+        is_internal_drag = (event.source() == self and self.selectedItems())
+
+        # --- Aturan 0: Mencegah drop ke diri sendiri ---
+        if is_internal_drag:
+            dragged_item = self.selectedItems()[0]
+            check_parent = target_item
+            while check_parent:
+                if check_parent == dragged_item:
+                    event.ignore(); return # Tolak
+                check_parent = check_parent.parent()
+
+        # --- Aturan 1: Drag file (dari OS, Source, atau Timeline) ---
+        if is_dragging_file:
+            
+            # 1a: Drop ke Source (hanya file OS)
+            if is_in_source(target_item) and event.mimeData().hasUrls():
+                event.accept(); return # Terima
+            
+            # 1b: Drop ke Timeline
+            if is_in_timeline(target_item):
+                target_is_file = (target_item.data(0, Qt.UserRole) is not None)
+                drop_indicator = self.dropIndicatorPosition()
+
+                if drop_indicator == QAbstractItemView.OnItem:
+                    # Jika drop "DI ATAS" (OnItem)
+                    if target_is_file:
+                        event.ignore(); return # TOLAK (Video di atas Video)
+                    
+                    # Cek apakah ini drag DARI DALAM timeline
+                    dragged_item_in_timeline = False
+                    if is_internal_drag:
+                         dragged_item_in_timeline = is_in_timeline(self.selectedItems()[0])
+                    
+                    if dragged_item_in_timeline:
+                         event.ignore(); return # TOLAK (Reorder Video ke dalam Folder)
+                    else:
+                         event.accept(); return # TERIMA (Source/OS ke dalam Folder)
+                else:
+                    # Drop "DI ANTARA" (Above/Below)
+                    # Ini adalah untuk ubah urutan.
+                    event.accept(); return # Terima
+            
+            # Jika tidak kena aturan di atas
+            event.ignore(); return
+
+        # --- Aturan 2: Drag folder (internal) ---
+        if is_internal_drag: # (dan is_dragging_file == False)
+            if is_in_timeline(target_item) or is_in_source(target_item):
+                event.accept() # Biarkan Qt urus reorder folder
+                return
+
+        event.ignore()
+            
+    def dropEvent(self, event: QDropEvent):
+        source_changed = False
+        timeline_reordered = False
+
+        # Helper untuk cek apakah target ada di timeline
+        def is_drop_in_timeline(target):
+            if not target:
+                return False
+            if target == self.timeline_item:
+                return True
+            parent = target.parent()
+            while parent:
+                if parent == self.timeline_item:
+                    return True
+                parent = parent.parent()
+            return False
+
+        target_item = self.itemAt(event.pos())
+
+        # Tentukan target drop (parent) dan posisi (index)
+        drop_indicator = self.dropIndicatorPosition()
+        parent_item = None
+        insert_index = -1
+
+        if not target_item: # Drop di area kosong
+            if event.mimeData().hasUrls():
+                parent_item = self.source_item # File OS ke Source
+            else:
+                parent_item = self.timeline_item # Item tree ke Timeline
+        elif drop_indicator == QAbstractItemView.AboveItem:
+            parent_item = target_item.parent()
+            insert_index = parent_item.indexOfChild(target_item)
+        elif drop_indicator == QAbstractItemView.BelowItem:
+            parent_item = target_item.parent()
+            insert_index = parent_item.indexOfChild(target_item) + 1
+        elif drop_indicator == QAbstractItemView.OnItem:
+            parent_item = target_item # Drop ke dalam folder/item
+            insert_index = -1
+        
+        # Jika drop ke item root (Source/Timeline), anggap drop 'OnItem'
+        if target_item == self.source_item or target_item == self.timeline_item:
+            parent_item = target_item
+            insert_index = -1
+
+        if not parent_item:
+            event.ignore()
+            return
+
+        # --- LOGIKA DROP ---
+
+        # 1. File dari OS
+        if event.mimeData().hasUrls():
+            files = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
+            if files:
+                target_root = parent_item
+                if not (is_drop_in_timeline(parent_item)):
+                     # Jika drop BUKAN di timeline, paksa ke source
+                     target_root = self.source_item 
+                     
+                self.filesDroppedOnTarget.emit(files, target_root)
+                source_changed = True
+            event.accept()
+
+        # 2. Drop dari Source (dengan data rename) -> Selalu COPY
+        elif event.mimeData().hasFormat(self.custom_mime_type):
+            if not is_drop_in_timeline(parent_item):
+                event.ignore()
+                return
+            
+            items_to_add = []
+            try:
+                serialized_data = bytes(event.mimeData().data(self.custom_mime_type)).decode('utf-8')
+                items_to_add = json.loads(serialized_data)
+            except Exception as e:
+                print(f"Error parsing custom mime data: {e}")
+                event.ignore()
+                return
+
+            for file_path, display_name in reversed(items_to_add):
+                is_duplicate = False
+                for i in range(parent_item.childCount()):
+                    if parent_item.child(i).data(0, Qt.UserRole) == file_path:
+                        is_duplicate = True; break
+                
+                if not is_duplicate:
                     new_item = QTreeWidgetItem([display_name]) # <-- NAMA YANG DI-RENAME
                     new_item.setData(0, Qt.UserRole, file_path)
                     new_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled | Qt.ItemIsEditable)
@@ -281,56 +1842,46 @@ class ProjectTreeWidget(QTreeWidget):
                         parent_item.addChild(new_item)
                     source_changed = True
                     timeline_reordered = True
-                event.accept()
+            event.accept()
 
-            # --- 3. Drop dari Timeline (playlist path) -> MOVE / COPY ---
-            elif event.mimeData().hasFormat("application/x-playlist-paths"):
-                
-                if not is_drop_in_timeline(parent_item):
-                        event.ignore()
-                        return
-                
-                # 3a. INTERNAL MOVE (dari Timeline ke Timeline)
-                # Aksi 'Move' hanya terjadi jika drag BUKAN dari source (yg dipaksa Copy)
-                if event.source() == self and (event.dropAction() == Qt.MoveAction):
-                    
-                    items_to_move = self.selectedItems()
-                    
-                    # Pengaman: Cek lagi jika ini dari Source (seharusnya tidak)
-                    is_from_source_check = any(item.parent() == self.source_item for item in items_to_move)
-                    
-                    if not is_from_source_check:
-                        # Ini adalah MOVE yg valid dari Timeline
-                        for item in items_to_move:
-                            old_parent = item.parent()
-                            if not old_parent: continue
-                            
-                            # Cek agar tidak drop ke dalam dirinya sendiri
-                            check_anc = parent_item
-                            is_invalid_drop = False
-                            while check_anc:
-                                if check_anc == item: is_invalid_drop = True; break
-                                check_anc = check_anc.parent()
-                            if is_invalid_drop: continue
+        # 3. Drop dari Timeline (Move atau Copy)
+        elif event.mimeData().hasFormat("application/x-playlist-paths"):
+            
+            if not is_drop_in_timeline(parent_item):
+                    event.ignore()
+                    return
 
-                            taken_item = old_parent.takeChild(old_parent.indexOfChild(item))
-                            
-                            if insert_index != -1:
-                                parent_item.insertChild(insert_index, taken_item)
-                                insert_index += 1 # Jaga urutan jika > 1 item
-                            else:
-                                parent_item.addChild(taken_item)
-
-                        event.acceptProposedAction()
-                        source_changed = True
-                        timeline_reordered = True
-                        
-                        # Keluar dari fungsi setelah move
-                        if source_changed: self.treeChanged.emit()
-                        if timeline_reordered: self.timelineOrderChanged.emit()
-                        return
+            # --- 3a. INTERNAL MOVE (dari Timeline ke Timeline) ---
+            if event.source() == self and (event.possibleActions() & Qt.MoveAction) and (event.dropAction() == Qt.MoveAction):
                 
-                # 3b. COPY (dari Timeline/Ctrl+Drag atau fallback dari Source)
+                items_to_move = self.selectedItems()
+                
+                for item in items_to_move:
+                    old_parent = item.parent()
+                    if not old_parent: continue
+                    
+                    # Cek agar tidak drop ke dalam dirinya sendiri
+                    check_anc = parent_item
+                    is_invalid_drop = False
+                    while check_anc:
+                        if check_anc == item: is_invalid_drop = True; break
+                        check_anc = check_anc.parent()
+                    if is_invalid_drop: continue
+
+                    taken_item = old_parent.takeChild(old_parent.indexOfChild(item))
+                    
+                    if insert_index != -1:
+                        parent_item.insertChild(insert_index, taken_item)
+                        insert_index += 1
+                    else:
+                        parent_item.addChild(taken_item)
+
+                event.acceptProposedAction() 
+                source_changed = True
+                timeline_reordered = True
+
+            # --- 3b. COPY (dari Timeline/Ctrl+Drag) ---
+            else: 
                 paths_data = event.mimeData().data("application/x-playlist-paths")
                 paths = str(paths_data, 'utf-8').split(',')
                 
@@ -343,7 +1894,7 @@ class ProjectTreeWidget(QTreeWidget):
                     for i in range(parent_item.childCount()):
                         if parent_item.child(i).data(0, Qt.UserRole) == file_path:
                             is_duplicate = True; break
-                    if is_duplicate: continue
+                    if is_duplicate: continue 
 
                     display_name = selected_map.get(file_path, os.path.basename(file_path))
 
@@ -361,21 +1912,351 @@ class ProjectTreeWidget(QTreeWidget):
                     timeline_reordered = True
                 event.accept()
 
-            # --- 4. Drop folder internal (dari super().startDrag()) ---
-            else:
-                # Ini hanya akan menangani 'move' folder dari Timeline ke Timeline
-                if (event.source() == self and is_drop_in_timeline(parent_item)):
-                    super().dropEvent(event)
-                    if event.isAccepted():
-                        source_changed = True
-                        timeline_reordered = True
-                else:
-                    event.ignore()
+        # 4. Drop folder internal (dari super().startDrag())
+        else:
+            # Ini akan menangani reorder folder di Source dan Timeline
+            super().dropEvent(event)
+            if event.isAccepted():
+                source_changed = True
+                timeline_reordered = True
+        
+        if source_changed:
+            self.treeChanged.emit()
+        if timeline_reordered:
+            self.timelineOrderChanged.emit()
+    filesDroppedOnTarget = pyqtSignal(list, object)
+    treeChanged = pyqtSignal()
+    timelineOrderChanged = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.source_item = None
+        self.timeline_item = None
+        # --- Definisikan MIME type kustom ---
+        self.custom_mime_type = "application/x-kenae-playlist-items"
+
+    def _is_in_timeline_branch(self, item):
+        """Helper: Cek apakah item adalah Timeline root atau di dalamnya."""
+        if not item: return False
+        if item == self.timeline_item: return True
+        parent = item.parent()
+        while parent:
+            if parent == self.timeline_item:
+                return True
+            parent = parent.parent()
+        return False
+
+    def _is_in_source_branch(self, item):
+        """Helper: Cek apakah item adalah Source root atau di dalamnya."""
+        if not item: return False
+        if item == self.source_item: return True
+        parent = item.parent()
+        while parent:
+            if parent == self.source_item:
+                return True
+            parent = parent.parent()
+        return False
+
+    def startDrag(self, supportedActions):
+        drag = QDrag(self)
+        mime_data = QMimeData()
+        
+        selected_items = self.selectedItems()
+        if not selected_items:
+            return
+
+        # --- Cek apakah ada path file yang valid untuk di-drag ---
+        paths = []
+        for item in selected_items:
+            path = item.data(0, Qt.UserRole)
+            if path:
+                paths.append(path)
+        
+        # Jika tidak ada path (misal folder), biarkan super() menangani drag internal
+        if not paths:
+            super().startDrag(supportedActions)
+            return
+
+        # --- ADA PATH, jadi kita buat MIME data ---
+        
+        # 1. Set data standar untuk player (selalu)
+        mime_data.setData("application/x-playlist-paths", bytearray(",".join(paths), 'utf-8'))
+
+        # 2. Cek apakah dari Source untuk data rename kustom
+        is_from_source = all(item.parent() == self.source_item for item in selected_items)
+        
+        if is_from_source:
+            # --- DARI SOURCE (COPY + RENAME) ---
+            items_data = [] 
+            for item in selected_items:
+                path = item.data(0, Qt.UserRole)
+                display_name = item.text(0)
+                if path:
+                    items_data.append((path, display_name))
             
-            if source_changed:
-                self.treeChanged.emit()
-            if timeline_reordered:
-                self.timelineOrderChanged.emit()
+            try:
+                serialized_data = json.dumps(items_data)
+                mime_data.setData(self.custom_mime_type, bytearray(serialized_data, 'utf-8'))
+            except Exception as e:
+                print(f"Error serializing drag data: {e}")
+            
+            drag.setMimeData(mime_data)
+            drag.exec_(Qt.CopyAction) # Hanya boleh copy dari source
+
+        else:
+            # --- DARI TIMELINE (MOVE + COPY) ---
+            drag.setMimeData(mime_data)
+            # Izinkan Move (default) dan Copy (jika user menekan Ctrl)
+            drag.exec_(supportedActions) 
+
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        if (event.mimeData().hasUrls() or 
+            event.mimeData().hasFormat("application/x-playlist-paths") or
+            event.mimeData().hasFormat(self.custom_mime_type)):
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        target_item = self.itemAt(event.pos())
+        is_valid_target = False
+        
+        if not target_item:
+             event.ignore()
+             return
+
+        # Cek apakah kita sedang men-drag sebuah file (dari OS, Source, atau Timeline)
+        is_dragging_file = (event.mimeData().hasUrls() or 
+                            event.mimeData().hasFormat(self.custom_mime_type) or
+                            event.mimeData().hasFormat("application/x-playlist-paths"))
+        
+        if is_dragging_file:
+            # Kita sedang men-drag sebuah file.
+            
+            # 1. Izinkan drop ke Source (hanya file dari OS)
+            if (self._is_in_source_branch(target_item)) and event.mimeData().hasUrls():
+                 is_valid_target = True
+            
+            # 2. Cek drop ke Timeline
+            elif (self._is_in_timeline_branch(target_item)):
+                
+                # Cek apakah TARGET-nya adalah sebuah file (video)
+                target_is_file = (target_item.data(0, Qt.UserRole) is not None)
+                
+                if target_is_file:
+                    # --- INI ADALAH ATURAN BARU ANDA ---
+                    # Targetnya adalah file. Hanya izinkan drop Di Antara (Above/Below).
+                    drop_indicator = self.dropIndicatorPosition()
+                    
+                    if drop_indicator == QAbstractItemView.OnItem:
+                        # Jika drop "DI ATAS" (OnItem) file, TOLAK
+                        is_valid_target = False
+                    else:
+                        # Jika drop "DI ANTARA" (Above/Below), TERIMA
+                        is_valid_target = True
+                    # --- AKHIR ATURAN BARU ---
+                else:
+                    # Targetnya adalah folder atau root Timeline, TERIMA
+                    is_valid_target = True
+        
+        # Cek jika ini drag internal (misal folder, yg ditangani 'super()')
+        elif event.source() == self:
+             is_valid_target = True
+
+        # Mencegah drop item ke dalam dirinya sendiri
+        if event.source() == self and self.selectedItems():
+            dragged_item = self.selectedItems()[0]
+            if target_item:
+                parent = target_item
+                while parent:
+                    if parent == dragged_item:
+                        is_valid_target = False # Paksa Tolak
+                        break
+                    parent = parent.parent()
+        
+        if is_valid_target:
+            event.accept()
+        else:
+            event.ignore()
+            
+    def dropEvent(self, event: QDropEvent):
+        source_changed = False
+        timeline_reordered = False
+
+        # Helper untuk cek apakah target ada di timeline
+        def is_drop_in_timeline(target):
+            if not target:
+                return False
+            if target == self.timeline_item:
+                return True
+            parent = target.parent()
+            while parent:
+                if parent == self.timeline_item:
+                    return True
+                parent = parent.parent()
+            return False
+
+        target_item = self.itemAt(event.pos())
+
+        # Tentukan target drop (parent) dan posisi (index)
+        drop_indicator = self.dropIndicatorPosition()
+        parent_item = None
+        insert_index = -1
+
+        if not target_item: # Drop di area kosong
+            if event.mimeData().hasUrls():
+                parent_item = self.source_item # File OS ke Source
+            else:
+                parent_item = self.timeline_item # Item tree ke Timeline
+        elif drop_indicator == QAbstractItemView.AboveItem:
+            parent_item = target_item.parent()
+            insert_index = parent_item.indexOfChild(target_item)
+        elif drop_indicator == QAbstractItemView.BelowItem:
+            parent_item = target_item.parent()
+            insert_index = parent_item.indexOfChild(target_item) + 1
+        elif drop_indicator == QAbstractItemView.OnItem:
+            parent_item = target_item # Drop ke dalam folder/item
+            insert_index = -1
+        
+        # Jika drop ke item root (Source/Timeline), anggap drop 'OnItem'
+        if target_item == self.source_item or target_item == self.timeline_item:
+            parent_item = target_item
+            insert_index = -1
+
+        if not parent_item:
+            event.ignore()
+            return
+
+        # --- LOGIKA DROP ---
+
+        # 1. File dari OS
+        if event.mimeData().hasUrls():
+            files = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
+            if files:
+                target_root = parent_item
+                if not (is_drop_in_timeline(parent_item)):
+                     # Jika drop BUKAN di timeline, paksa ke source
+                     target_root = self.source_item 
+                     
+                self.filesDroppedOnTarget.emit(files, target_root)
+                source_changed = True
+            event.accept()
+
+        # 2. Drop dari Source (dengan data rename) -> Selalu COPY
+        elif event.mimeData().hasFormat(self.custom_mime_type):
+            if not is_drop_in_timeline(parent_item):
+                event.ignore()
+                return
+            
+            items_to_add = []
+            try:
+                serialized_data = bytes(event.mimeData().data(self.custom_mime_type)).decode('utf-8')
+                items_to_add = json.loads(serialized_data)
+            except Exception as e:
+                print(f"Error parsing custom mime data: {e}")
+                event.ignore()
+                return
+
+            for file_path, display_name in reversed(items_to_add):
+                is_duplicate = False
+                for i in range(parent_item.childCount()):
+                    if parent_item.child(i).data(0, Qt.UserRole) == file_path:
+                        is_duplicate = True; break
+                
+                if not is_duplicate:
+                    new_item = QTreeWidgetItem([display_name]) # <-- NAMA YANG DI-RENAME
+                    new_item.setData(0, Qt.UserRole, file_path)
+                    new_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled | Qt.ItemIsEditable)
+                    new_item.setToolTip(0, file_path)
+                    
+                    if insert_index != -1:
+                        parent_item.insertChild(insert_index, new_item)
+                    else:
+                        parent_item.addChild(new_item)
+                    source_changed = True
+                    timeline_reordered = True
+            event.accept()
+
+        # 3. Drop dari Timeline (Move atau Copy)
+        elif event.mimeData().hasFormat("application/x-playlist-paths"):
+            
+            if not is_drop_in_timeline(parent_item):
+                    event.ignore()
+                    return
+
+            # --- 3a. INTERNAL MOVE (dari Timeline ke Timeline) ---
+            if event.source() == self and (event.possibleActions() & Qt.MoveAction) and (event.dropAction() == Qt.MoveAction):
+                
+                items_to_move = self.selectedItems()
+                
+                for item in items_to_move:
+                    old_parent = item.parent()
+                    if not old_parent: continue
+                    
+                    # Cek agar tidak drop ke dalam dirinya sendiri
+                    check_anc = parent_item
+                    is_invalid_drop = False
+                    while check_anc:
+                        if check_anc == item: is_invalid_drop = True; break
+                        check_anc = check_anc.parent()
+                    if is_invalid_drop: continue
+
+                    taken_item = old_parent.takeChild(old_parent.indexOfChild(item))
+                    
+                    if insert_index != -1:
+                        parent_item.insertChild(insert_index, taken_item)
+                        insert_index += 1
+                    else:
+                        parent_item.addChild(taken_item)
+
+                event.acceptProposedAction() 
+                source_changed = True
+                timeline_reordered = True
+
+            # --- 3b. COPY (dari Timeline/Ctrl+Drag) ---
+            else: 
+                paths_data = event.mimeData().data("application/x-playlist-paths")
+                paths = str(paths_data, 'utf-8').split(',')
+                
+                selected_map = {}
+                if event.source() == self:
+                    selected_map = {item.data(0, Qt.UserRole): item.text(0) for item in self.selectedItems()}
+
+                for file_path in reversed(paths):
+                    is_duplicate = False
+                    for i in range(parent_item.childCount()):
+                        if parent_item.child(i).data(0, Qt.UserRole) == file_path:
+                            is_duplicate = True; break
+                    if is_duplicate: continue 
+
+                    display_name = selected_map.get(file_path, os.path.basename(file_path))
+
+                    new_item = QTreeWidgetItem([display_name])
+                    new_item.setData(0, Qt.UserRole, file_path)
+                    new_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled | Qt.ItemIsEditable)
+                    new_item.setToolTip(0, file_path)
+                    
+                    if insert_index != -1:
+                        parent_item.insertChild(insert_index, new_item)
+                    else:
+                        parent_item.addChild(new_item)
+                    
+                    source_changed = True
+                    timeline_reordered = True
+                event.accept()
+
+        # 4. Drop folder internal (dari super().startDrag())
+        else:
+            # Ini akan menangani reorder folder di Source dan Timeline
+            super().dropEvent(event)
+            if event.isAccepted():
+                source_changed = True
+                timeline_reordered = True
+        
+        if source_changed:
+            self.treeChanged.emit()
+        if timeline_reordered:
+            self.timelineOrderChanged.emit()
 
 class PlaybackMode(Enum):
     LOOP = auto()
@@ -1744,14 +3625,27 @@ class MainWindow(QMainWindow):
         return os.path.normpath(path)    
     
     def _is_in_timeline_branch(self, item):
-        """Checks if an item is the Timeline root or any of its descendants."""
-        parent = item
+        """Helper: Cek apakah item adalah Timeline root atau di dalamnya."""
+        if not item: return False
+        if item == self.timeline_item: return True
+        parent = item.parent()
         while parent:
             if parent == self.timeline_item:
                 return True
             parent = parent.parent()
         return False
-        
+
+    def _is_in_source_branch(self, item):
+        """Helper: Cek apakah item adalah Source root atau di dalamnya."""
+        if not item: return False
+        if item == self.source_item: return True
+        parent = item.parent()
+        while parent:
+            if parent == self.source_item:
+                return True
+            parent = parent.parent()
+        return False
+    
     def save_playlist(self):
         default_path = self.last_playlist_path or os.getcwd()
         file_path, _ = QFileDialog.getSaveFileName(self, "Save Playlist", default_path, "Kenae Playlist (*.kenae)")
@@ -3128,4 +5022,3 @@ class MainWindow(QMainWindow):
             self.drawing_toolbar.setVisible(True) # <--- TAMBAHAN
             if self.splitter_sizes:
                 self.splitter.setSizes(self.splitter_sizes)
-        # --- AKHIR PERBAIKAN ---
