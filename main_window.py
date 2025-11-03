@@ -479,48 +479,81 @@ class MainWindow(QMainWindow):
         image_extensions = ['.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.exr', '.dpx']
         processed_files = set()
         resolved_paths = []
+        
+        # Urutkan file input
         sorted_paths = sorted(file_paths)
+        
         for path in sorted_paths:
             if path in processed_files:
                 continue
+            
             is_image = any(path.lower().endswith(ext) for ext in image_extensions)
             if not is_image:
                 resolved_paths.append(path)
                 processed_files.add(path)
                 continue
+            
             dirname = os.path.dirname(path)
             filename = os.path.basename(path)
-            match = re.match(r'^(.*?)(\d+)(\.[^.]+)$', filename)
+            # Regex untuk "nama", "angka", "ekstensi"
+            match = re.match(r'^(.*?)(\d+)(\.[^.]+)$', filename) 
+            
             if not match:
                 resolved_paths.append(path)
                 processed_files.add(path)
                 continue
+                
             base_name, number_str, extension = match.groups()
-            padding = len(number_str)
+            # Gunakan padding dari file PERTAMA yang kita temui sebagai "standar"
+            padding = len(number_str) 
+            
             sequence_files = []
             frame_numbers = []
+
             try:
+                # Scan seluruh direktori tempat file ini berada
                 all_files_in_dir = os.listdir(dirname)
             except OSError:
                 resolved_paths.append(path)
                 processed_files.add(path)
                 continue
+
             for f in all_files_in_dir:
                 seq_match = re.match(r'^(.*?)(\d+)(\.[^.]+)$', f)
                 if seq_match:
                     s_base, s_num_str, s_ext = seq_match.groups()
+                    
+                    # Cek jika base, extension, DAN PADDING cocok
                     if s_base == base_name and s_ext.lower() == extension.lower() and len(s_num_str) == padding:
-                        sequence_files.append(os.path.join(dirname, f))
-                        frame_numbers.append(int(s_num_str))
+                        full_path = os.path.join(dirname, f)
+                        
+                        # Ambil semua file yg cocok jika kita scan folder
+                        # (file_paths adalah semua gambar di folder)
+                        if full_path in sorted_paths:
+                            sequence_files.append(full_path)
+                            frame_numbers.append(int(s_num_str))
+
             if len(sequence_files) > 1:
                 min_frame, max_frame = min(frame_numbers), max(frame_numbers)
-                display_name = f"{base_name}[{min_frame:0{padding}d}-{max_frame:0{padding}d}]{extension}"
-                sequence_pattern_path = os.path.join(dirname, f"{base_name}%0{padding}d{extension}")
-                resolved_paths.append((sequence_pattern_path, display_name))
-                processed_files.update(sequence_files)
+                
+                # Cek jika frame kontigu (berurutan tanpa jeda)
+                if (max_frame - min_frame + 1) == len(frame_numbers):
+                    # Ya, ini sequence kontigu
+                    display_name = f"{base_name}[{min_frame:0{padding}d}-{max_frame:0{padding}d}]{extension}"
+                    sequence_pattern_path = os.path.join(dirname, f"{base_name}%0{padding}d{extension}")
+                    resolved_paths.append((sequence_pattern_path, display_name))
+                    processed_files.update(sequence_files)
+                else:
+                    # Frame tidak kontigu, tambahkan sebagai file individual
+                    for seq_file in sequence_files:
+                        if seq_file not in processed_files:
+                            resolved_paths.append(seq_file)
+                            processed_files.add(seq_file)
             else:
+                # Bukan sequence, tambahkan file ini saja
                 resolved_paths.append(path)
                 processed_files.add(path)
+                
         return resolved_paths
     
     def handle_timeline_reorder(self):
@@ -1585,11 +1618,41 @@ class MainWindow(QMainWindow):
             if resolved_media:
                 item_to_load = resolved_media[0]
                 path_to_load = item_to_load[0] if isinstance(item_to_load, tuple) else item_to_load
-                self.load_single_file(path_to_load, clear_marks=True, clear_segments=True)
+                self.load_single_file(path_to_load, clear_segments=True)
             
-    def open_image_sequence(self, file_paths):
-        folder_path = QFileDialog.getExistingDirectory(self, "Select Folder", "")
-        if folder_path: pass
+    def open_image_sequence(self, file_paths=None): # 'file_paths' tidak terpakai
+        folder_path = QFileDialog.getExistingDirectory(self, "Select Image Sequence Folder", "")
+        if not folder_path:
+            return
+
+        all_image_paths = []
+        try:
+            all_files_in_dir = sorted(os.listdir(folder_path))
+        except OSError as e:
+            self.status_bar.showMessage(f"Error reading folder: {e}", 3000)
+            return
+            
+        image_extensions = ['.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.exr', '.dpx']
+        
+        for f in all_files_in_dir:
+            if any(f.lower().endswith(ext) for ext in image_extensions):
+                all_image_paths.append(os.path.join(folder_path, f))
+
+        if not all_image_paths:
+            self.status_bar.showMessage("No image files found in the selected folder.", 3000)
+            return
+
+        # Kirim SEMUA file gambar ke resolver
+        resolved_media = self._resolve_sequences_and_files(all_image_paths)
+        self.add_files_to_source(resolved_media)
+        
+        if resolved_media:
+            # Muat item pertama yang ditemukan
+            item_to_load = resolved_media[0]
+            path_to_load = item_to_load[0] if isinstance(item_to_load, tuple) else item_to_load
+            
+            # Panggil load_single_file (yang sudah benar)
+            self.load_single_file(path_to_load, clear_segments=True)
         
     def save_playlist(self):
         default_path = self.last_playlist_path or os.getcwd()
@@ -2272,33 +2335,45 @@ class MainWindow(QMainWindow):
             iterator += 1
         return None
         
-    def play_next_timeline_item(self):
-        # Fungsi ini HANYA untuk mode tree (non-segmen)
-        if self.segment_map: return # Ditangani oleh handle_playback_finished
+    def open_image_sequence(self, file_paths=None): # 'file_paths' tidak terpakai
+        folder_path = QFileDialog.getExistingDirectory(self, "Select Media Folder", "") # Ubah judul
+        if not folder_path:
+            return
+
+        all_media_paths = []
+        try:
+            all_files_in_dir = sorted(os.listdir(folder_path))
+        except OSError as e:
+            self.status_bar.showMessage(f"Error reading folder: {e}", 3000)
+            return
+            
+        # --- PERBAIKAN: Tambahkan ekstensi video ---
+        image_extensions = ['.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.exr', '.dpx']
+        video_extensions = ['.mp4', '.avi', '.mov', '.mkv'] # Tambahkan video
+        all_extensions = image_extensions + video_extensions
+        # --- AKHIR PERBAIKAN ---
         
-        current_path = self.media_player.get_current_file_path()
-        current_item = self.find_item_by_path_recursive(current_path, self.timeline_item)
-        if not current_item or not current_item.parent(): return
+        for f in all_files_in_dir:
+            # Cek jika file_name diakhiri dengan ekstensi media
+            if any(f.lower().endswith(ext) for ext in all_extensions):
+                all_media_paths.append(os.path.join(folder_path, f))
+
+        if not all_media_paths:
+            self.status_bar.showMessage("No media files found in the selected folder.", 3000)
+            return
+
+        # Kirim SEMUA file media ke resolver
+        # _resolve_sequences_and_files akan memisahkan sequence dan video individual
+        resolved_media = self._resolve_sequences_and_files(all_media_paths)
+        self.add_files_to_source(resolved_media)
         
-        parent = current_item.parent()
-        current_index = parent.indexOfChild(current_item)
-        next_item = None
-        
-        # Cari item file berikutnya di dalam folder yang sama
-        for i in range(current_index + 1, parent.childCount()):
-            potential_next = parent.child(i)
-            if potential_next.data(0, Qt.UserRole):
-                next_item = potential_next
-                break
-        
-        if next_item:
-            self.playlist_widget.setCurrentItem(next_item)
-            next_file_path = next_item.data(0, Qt.UserRole)
-            self.load_single_file(next_file_path, clear_marks=False, clear_segments=True) # Hapus segmen lama
-            if self.playback_mode == PlaybackMode.PLAY_NEXT:
-                QTimer.singleShot(100, self.media_player.toggle_play)
-        else:
-            self.set_playback_mode(PlaybackMode.PLAY_ONCE)
+        if resolved_media:
+            # Muat item pertama yang ditemukan
+            item_to_load = resolved_media[0]
+            path_to_load = item_to_load[0] if isinstance(item_to_load, tuple) else item_to_load
+            
+            # Panggil load_single_file (yang sudah benar)
+            self.load_single_file(path_to_load, clear_segments=True)
                 
     def play_previous_timeline_item(self):
         # Fungsi ini HANYA untuk mode tree (non-segmen)
@@ -2324,6 +2399,38 @@ class MainWindow(QMainWindow):
         if prev_item:
             self.playlist_widget.setCurrentItem(prev_item)
             self.load_from_tree(prev_item) # Panggil load_from_tree
+            
+    def play_next_timeline_item(self):
+        # Fungsi ini HANYA untuk mode tree (non-segmen)
+        if self.segment_map: return # Ditangani oleh handle_playback_finished
+        
+        current_path = self.media_player.get_current_file_path()
+        current_item = self.find_item_by_path_recursive(current_path, self.timeline_item)
+        if not current_item or not current_item.parent(): return
+        
+        parent = current_item.parent()
+        current_index = parent.indexOfChild(current_item)
+        next_item = None
+        
+        # Cari item file berikutnya di dalam folder yang sama
+        for i in range(current_index + 1, parent.childCount()):
+            potential_next = parent.child(i)
+            if potential_next.data(0, Qt.UserRole):
+                next_item = potential_next
+                break
+        
+        if next_item:
+            self.playlist_widget.setCurrentItem(next_item)
+            next_file_path = next_item.data(0, Qt.UserRole)
+            
+            # --- PERBAIKAN: Hapus 'clear_marks=False' ---
+            self.load_single_file(next_file_path, clear_segments=True)
+            # --- AKHIR PERBAIKAN ---
+            
+            if self.playback_mode == PlaybackMode.PLAY_NEXT:
+                QTimer.singleShot(100, self.media_player.toggle_play)
+        else:
+            self.set_playback_mode(PlaybackMode.PLAY_ONCE)        
             
     def load_from_tree(self, item, column=0):
         file_path = item.data(0, Qt.UserRole)
