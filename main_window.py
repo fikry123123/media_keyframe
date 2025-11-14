@@ -402,6 +402,11 @@ class MainWindow(QMainWindow):
         self.timeline_item.setExpanded(True)
         self.playlist_widget.itemDoubleClicked.connect(self.load_from_tree)
         playlist_layout.addWidget(self.playlist_widget)
+        self.delete_action = QAction("Delete", self)
+        self.delete_action.setShortcut(QKeySequence.Delete)
+        self.delete_action.setShortcutContext(Qt.WidgetShortcut) # Penting!
+        self.delete_action.triggered.connect(self.delete_selected_items_handler)
+        self.playlist_widget.addAction(self.delete_action)
         
         media_widget = QWidget()
         media_layout = QVBoxLayout(media_widget)
@@ -469,11 +474,7 @@ class MainWindow(QMainWindow):
         # --- AKHIR KONEKSI ---
 
     def setup_shortcuts(self):
-        # HANYA shortcut dasar navigasi frame yang tidak ada di menu
-        QShortcut(QKeySequence(Qt.Key_Left), self).activated.connect(self.previous_frame)
-        QShortcut(QKeySequence(Qt.Key_Right), self).activated.connect(self.next_frame)
-        QShortcut(QKeySequence(Qt.Key_Home), self).activated.connect(self.go_to_first_frame)
-        QShortcut(QKeySequence(Qt.Key_End), self).activated.connect(self.go_to_last_frame)
+        pass
 
     def _resolve_sequences_and_files(self, file_paths):
         image_extensions = ['.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.exr', '.dpx']
@@ -527,11 +528,13 @@ class MainWindow(QMainWindow):
                     if s_base == base_name and s_ext.lower() == extension.lower() and len(s_num_str) == padding:
                         full_path = os.path.join(dirname, f)
                         
-                        # Ambil semua file yg cocok jika kita scan folder
-                        # (file_paths adalah semua gambar di folder)
-                        if full_path in sorted_paths:
-                            sequence_files.append(full_path)
-                            frame_numbers.append(int(s_num_str))
+                        # --- PERBAIKAN DI SINI ---
+                        # Hapus pengecekan 'if full_path in sorted_paths:'
+                        # Kita ingin menemukan semua file yang cocok di direktori,
+                        # tidak peduli apakah file itu ada di daftar input awal.
+                        sequence_files.append(full_path)
+                        frame_numbers.append(int(s_num_str))
+                        # --- AKHIR PERBAIKAN ---
 
             if len(sequence_files) > 1:
                 min_frame, max_frame = min(frame_numbers), max(frame_numbers)
@@ -828,7 +831,7 @@ class MainWindow(QMainWindow):
         draw_menu.addAction(pick_color_action)
         draw_menu.addSeparator()
         clear_frame_action = QAction("Clear Frame Drawing", self)
-        clear_frame_action.setShortcut("Ctrl+Backspace")
+        clear_frame_action.setShortcut("Ctrl+Shift+X")
         clear_frame_action.triggered.connect(self.clear_current_frame_drawing)
         draw_menu.addAction(clear_frame_action)
         
@@ -1060,7 +1063,7 @@ class MainWindow(QMainWindow):
             <h3>Drawing (View A)</h3>
             Use the <b>Drawing Toolbar</b> (✏️) on the left side of the window.<br>
             (Drawing on a frame automatically adds a Green Mark)
-
+            <b>Ctrl + Shift + X</b>: Clear Drawing on Current Frame<br>
             <h3>File</h3>
             <b>Ctrl + O</b>: Open File<br>
             <b>Ctrl + Shift + O</b>: Open Image Sequence<br>
@@ -1426,51 +1429,55 @@ class MainWindow(QMainWindow):
         return path       
                 
     def delete_selected_items_handler(self):
-        selected_items = self.playlist_widget.selectedItems()
-        if not selected_items: return
-        removed_paths = set()
-        timeline_modified = False
-        for item in list(selected_items):
-            parent = item.parent()
-            if not parent:
-                continue
-            removed_paths.update(self._collect_media_paths_recursive(item))
-            if not timeline_modified and self._is_in_timeline_branch(item):
-                timeline_modified = True
-            parent.removeChild(item)
+            if not self.playlist_widget.hasFocus():
+                return
 
-        removed_paths_normalized = removed_paths
-        if removed_paths_normalized:
-            cache_keys_to_remove = [
-                key for key in list(self.media_info_cache.keys())
-                if self._normalize_media_path(key) in removed_paths_normalized
-            ]
-            for key in cache_keys_to_remove:
-                self.media_info_cache.pop(key, None)
-        current_a = self._normalize_media_path(self.media_player.get_current_file_path())
-        current_b = self._normalize_media_path(self.media_player_2.get_current_file_path()) if self.compare_mode else None
 
-        cleared_media = False
-        if current_a and current_a in removed_paths_normalized:
-            self.media_player.clear_media()
-            cleared_media = True
-        if self.compare_mode and current_b and current_b in removed_paths_normalized:
-            self.media_player_2.clear_media()
-            cleared_media = True
+            selected_items = self.playlist_widget.selectedItems()
+            if not selected_items: return
+            removed_paths = set()
+            timeline_modified = False
+            for item in list(selected_items):
+                parent = item.parent()
+                if not parent:
+                    continue
+                removed_paths.update(self._collect_media_paths_recursive(item))
+                if not timeline_modified and self._is_in_timeline_branch(item):
+                    timeline_modified = True
+                parent.removeChild(item)
 
-        if cleared_media:
-            self.clear_all_marks(clear_segments=True)
+            removed_paths_normalized = removed_paths
+            if removed_paths_normalized:
+                cache_keys_to_remove = [
+                    key for key in list(self.media_info_cache.keys())
+                    if self._normalize_media_path(key) in removed_paths_normalized
+                ]
+                for key in cache_keys_to_remove:
+                    self.media_info_cache.pop(key, None)
+            current_a = self._normalize_media_path(self.media_player.get_current_file_path())
+            current_b = self._normalize_media_path(self.media_player_2.get_current_file_path()) if self.compare_mode else None
 
-        if removed_paths_normalized and self.segment_map:
-            if any(self._normalize_media_path(segment['path']) in removed_paths_normalized for segment in self.segment_map):
-                self.segment_map.clear()
-                self.current_segment_total_frames = 0
-                self.timeline.set_segments([], 0)
+            cleared_media = False
+            if current_a and current_a in removed_paths_normalized:
+                self.media_player.clear_media()
+                cleared_media = True
+            if self.compare_mode and current_b and current_b in removed_paths_normalized:
+                self.media_player_2.clear_media()
+                cleared_media = True
 
-        self.update_total_duration()
-        self.update_playlist_item_indicator()
-        if removed_paths_normalized or timeline_modified:
-            self.status_bar.showMessage("Selected items removed.", 2000)
+            if cleared_media:
+                self.clear_all_marks(clear_segments=True)
+
+            if removed_paths_normalized and self.segment_map:
+                if any(self._normalize_media_path(segment['path']) in removed_paths_normalized for segment in self.segment_map):
+                    self.segment_map.clear()
+                    self.current_segment_total_frames = 0
+                    self.timeline.set_segments([], 0)
+
+            self.update_total_duration()
+            self.update_playlist_item_indicator()
+            if removed_paths_normalized or timeline_modified:
+                self.status_bar.showMessage("Selected items removed.", 2000)
     
     def set_playback_mode(self, mode):
         self.playback_mode = mode
