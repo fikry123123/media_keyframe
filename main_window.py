@@ -1562,14 +1562,15 @@ class MainWindow(QMainWindow):
     def handle_volume_change(self, value):
         self.media_player.set_volume(value)
 
-    def handle_playback_finished(self):
+    def handle_playback_finished(self, audio_has_ended):
         if self.is_compare_playing:
             self.is_compare_playing = False
             self.controls.set_play_state(False)
+            self.seek_to_position(0)
             
             # Cek jika mode loop range aktif di compare mode
             if self.playback_mode == PlaybackMode.LOOP_MARKED_RANGE:
-                 return # Fungsi update_compare_frames akan menanganinya
+                return # Fungsi update_compare_frames akan menanganinya
             
             # Cek jika mode loop normal aktif di compare mode
             if self.playback_mode == PlaybackMode.LOOP:
@@ -1580,11 +1581,11 @@ class MainWindow(QMainWindow):
             return
 
         if self.playback_mode == PlaybackMode.LOOP:
-            self.seek_to_position(0)
-            if not self.compare_mode: self.media_player.toggle_play()
+            
+            if not self.compare_mode: 
+                self.media_player.toggle_play()
         
         elif self.playback_mode == PlaybackMode.PLAY_NEXT:
-            
             # --- LOGIKA SEGMEN BARU ---
             if self.segment_map:
                 current_path = self.media_player.get_current_file_path()
@@ -1595,15 +1596,10 @@ class MainWindow(QMainWindow):
                         break
                 
                 if current_index != -1 and (current_index + 1) < len(self.segment_map):
-                    # Play segmen berikutnya
                     next_segment = self.segment_map[current_index + 1]
-                    
-                    # --- PERBAIKAN: Hapus argumen 'clear_marks' ---
                     self.load_single_file(next_segment['path'], clear_segments=False)
-                    
                     QTimer.singleShot(100, self.media_player.toggle_play)
                 else:
-                    # Segmen terakhir selesai, berhenti.
                     self.set_playback_mode(PlaybackMode.PLAY_ONCE)
             
             # --- LOGIKA TREE ASLI ---
@@ -1611,11 +1607,9 @@ class MainWindow(QMainWindow):
                 current_path = self.media_player.get_current_file_path()
                 item = self.find_item_by_path_recursive(current_path, self.timeline_item)
                 if item: 
-                    self.play_next_timeline_item() # Fungsi ini mencari item berikutnya di tree
+                    self.play_next_timeline_item() 
                 else:
-                    # Bukan di timeline, berhenti saja
                     self.set_playback_mode(PlaybackMode.PLAY_ONCE)
-            # --- AKHIR LOGIKA SEGMEN ---
             
     def open_file(self):
         file_paths, _ = QFileDialog.getOpenFileNames(self, "Open Media File", "", "Media Files (*.mp4 *.avi *.mov *.mkv *.jpg *.png *.jpeg *.bmp *.tiff);;All Files (*)")
@@ -1921,35 +1915,37 @@ class MainWindow(QMainWindow):
         if self.is_compare_playing: return
         if self.media_player.drawing_enabled: self.set_drawing_off() 
 
-        # --- PERBAIKAN: Gunakan seek_to_position untuk mode segmen ---
+        # --- Ini harus ada ---
+        if self.media_player.is_playing:
+            self.toggle_play() # Hentikan playback
+        # --- ---
+
         if not self.segment_map:
             self.media_player.previous_frame()
-            if self.compare_mode:
-                self.media_player_2.previous_frame()
-                self.update_composite_view()
+            # ... (sisa fungsi Anda) ...
         else:
-            # Mode segmen
             current_global_frame = self.timeline.current_position
             if current_global_frame > 0:
                 self.seek_to_position(current_global_frame - 1)
-        # --- AKHIR PERBAIKAN ---
             
     def next_frame(self):
         if self.is_compare_playing: return
         if self.media_player.drawing_enabled: self.set_drawing_off() 
         
-        # --- PERBAIKAN: Gunakan seek_to_position untuk mode segmen ---
+        # --- Ini harus ada ---
+        if self.media_player.is_playing:
+            self.toggle_play() # Hentikan playback
+        # --- ---
+        
         if not self.segment_map:
             self.media_player.next_frame()
             if self.compare_mode:
                 self.media_player_2.next_frame()
                 self.update_composite_view()
         else:
-            # Mode segmen
             current_global_frame = self.timeline.current_position
             if current_global_frame < self.current_segment_total_frames - 1:
                 self.seek_to_position(current_global_frame + 1)
-        # --- AKHIR PERBAIKAN ---
             
     def seek_to_position(self, position, _internal_call=False):
         # --- PERBAIKAN: Jangan hentikan tour jika dipanggil oleh tour itu sendiri ---

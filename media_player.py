@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import QLabel, QVBoxLayout, QWidget, QSizePolicy
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QMimeData, QUrl, QPoint, QSize
 from PyQt5.QtGui import QPixmap, QImage, QDragEnterEvent, QDropEvent, QPainter, QPen, QColor
 
-# --- PERUBAHAN 1: Impor VLC ---
+# --- Impor VLC ---
 try:
     import vlc
 except ImportError:
@@ -16,11 +16,13 @@ except ImportError:
     print("Silakan instal dengan menjalankan: pip install python-vlc")
     print("="*50)
     vlc = None
-# --- AKHIR PERUBAHAN ---
+# --- Akhir Impor ---
 
 
 class DrawingLabel(QLabel):
-    # ... (Kelas ini tidak berubah, sudah benar) ...
+    """
+    Label kustom yang menangani input mouse untuk menggambar pada frame video.
+    """
     def __init__(self, parent_media_player):
         super().__init__()
         self.media_player = parent_media_player
@@ -31,6 +33,10 @@ class DrawingLabel(QLabel):
         self.last_pan_pos = QPoint(0, 0)
 
     def _map_widget_to_frame_coords(self, widget_pos):
+        """
+        Memetakan koordinat QPoint dari widget label ke koordinat (x, y) 
+        pada frame video asli.
+        """
         mp = self.media_player
         if not mp.pixmap_size or mp.pixmap_size.width() == 0 or mp.pixmap_size.height() == 0 or mp.frame_dims is None:
             return None
@@ -43,6 +49,7 @@ class DrawingLabel(QLabel):
         return QPoint(int(fx), int(fy))
 
     def mousePressEvent(self, event):
+        # Prioritas 1: Panning Tombol Tengah
         if event.button() == Qt.MiddleButton:
             if self.media_player.zoom_factor > 1.001: 
                 self.panning = True
@@ -50,6 +57,8 @@ class DrawingLabel(QLabel):
                 self.setCursor(Qt.ClosedHandCursor)
                 event.accept()
                 return 
+                
+        # Prioritas 2: Tombol Kiri
         if event.button() == Qt.LeftButton:
             if self.media_player.drawing_enabled and self.media_player.has_media():
                 frame_pos = self._map_widget_to_frame_coords(event.pos())
@@ -66,6 +75,7 @@ class DrawingLabel(QLabel):
                 self.setCursor(Qt.ClosedHandCursor)
                 event.accept()
                 return
+                
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event):
@@ -178,6 +188,8 @@ class DrawingLabel(QLabel):
             self.media_player.display_frame(self.media_player.displayed_frame_source)
         event.accept()
 
+# --- Akhir dari class DrawingLabel ---
+
 
 class MediaPlayer(QWidget):
     frameIndexChanged = pyqtSignal(int, int)
@@ -201,7 +213,10 @@ class MediaPlayer(QWidget):
         self.is_playing = False
         self.video_timer = QTimer()
         self.video_timer.setTimerType(Qt.PreciseTimer)
+        
+        # --- KONEKSI TIMER (INI YANG GAGAL SEBELUMNYA) ---
         self.video_timer.timeout.connect(self.update_video_frame)
+        
         self.fps = 30
         self.current_media_path = None
         self.has_finished = False
@@ -212,22 +227,24 @@ class MediaPlayer(QWidget):
         self.playback_start_time = None
         self.compare_split_ratio = None
         
-        # --- PERBAIKAN 2: Inisialisasi VLC ---
+        # --- Inisialisasi VLC ---
         self.vlc_instance = None
         self.audio_player = None
         if self.enable_audio and vlc:
             try:
-                # Opsi untuk mematikan output video dan log error
+                # Opsi buffer untuk perbaiki "kretek-kretek"
                 vlc_args = [
                     '--no-video',
-                    '--quiet'
+                    '--quiet',
+                    '--file-caching=1500', # Buffer 1.5 detik
+                    '--aout=waveout' # Driver audio Windows yang stabil
                 ]
                 self.vlc_instance = vlc.Instance(vlc_args)
                 self.audio_player = self.vlc_instance.media_player_new()
             except Exception as e:
                 print(f"Error inisialisasi VLC: {e}")
                 self.enable_audio = False
-        # --- AKHIR PERBAIKAN ---
+        # --- AKHIR VLC ---
         
         self.annotations = {} 
         self.drawing_enabled = False
@@ -259,7 +276,6 @@ class MediaPlayer(QWidget):
         self.video_label.setText("Load media file to start...")
         layout.addWidget(self.video_label)
 
-    # --- PERBAIKAN 3: _prepare_audio (VLC) ---
     def _prepare_audio(self, file_path):
         if not self.audio_player:
             return
@@ -268,59 +284,46 @@ class MediaPlayer(QWidget):
 
         if file_path:
             try:
-                # Buat media baru dari path
                 media = self.vlc_instance.media_new(file_path)
+                # Panggil .parse() pada MEDIA
+                media.parse() 
                 self.audio_player.set_media(media)
-                # Set volume (VLC 0-100, cocok dengan slider kita)
                 self.audio_player.audio_set_volume(self._volume)
-                # Pastikan video track dimatikan (meskipun kita pakai --no-video)
-                # Menunggu media di-parse untuk menonaktifkan video
-                self.audio_player.parse() 
+                
                 video_track_count = self.audio_player.video_get_track_count()
                 if video_track_count > 0:
-                    self.audio_player.video_set_track(-1) # Nonaktifkan video
+                    self.audio_player.video_set_track(-1) 
                 
-                # Segera sync ke frame 0 (atau frame saat ini)
                 self._sync_audio_to_current_frame(force=True)
             except Exception as e:
                 print(f"Error VLC saat memuat audio: {e}")
-    # --- AKHIR PERBAIKAN ---
 
     def _current_time_ms(self):
         if self.fps <= 0 or self.current_frame_index < 0:
             return 0
         return int((self.current_frame_index / self.fps) * 1000)
 
-    # --- PERBAIKAN 4: _sync_audio_to_current_frame (VLC) ---
     def _sync_audio_to_current_frame(self, force=False):
-        if not self.audio_player:
-            return
+        # Fungsi ini HANYA akan dipanggil dengan force=True
+        # (dari play, stop, seek_to_position, dll.)
+        
+        if not self.audio_player or not force:
+            return # Jangan lakukan apa-apa jika tidak dipaksa
 
         target_ms = self._current_time_ms()
         
         try:
-            if force:
-                # force=True berarti kita MENGGESER (seek)
-                # set_time mengambil milidetik
-                self.audio_player.set_time(target_ms)
-                
-                if self.is_playing:
-                    self.audio_player.play()
-                else:
-                    self.audio_player.pause()
-                    
+            # 1. Seek audio ke waktu yang benar
+            self.audio_player.set_time(target_ms)
+            
+            # 2. Atur status play/pause BANYA PADA AUDIO
+            if self.is_playing:
+                self.audio_player.play()
             else:
-                # force=False berarti kita SYNC saat memutar
-                if self.is_playing:
-                    current_ms = self.audio_player.get_time()
-                    # Jika audio melenceng lebih dari 150ms, paksa seek
-                    if abs(current_ms - target_ms) > 150: 
-                        self.audio_player.set_time(target_ms)
-                        if not self.audio_player.is_playing():
-                            self.audio_player.play()
+                self.audio_player.pause()
+                
         except Exception as e:
-            print(f"Error saat sinkronisasi VLC: {e}")
-    # --- AKHIR PERBAIKAN ---
+            print(f"Error saat sinkronisasi VLC (force=True): {e}")
 
     def _reset_playback_clock(self):
         if self.is_playing and self.fps > 0:
@@ -328,13 +331,10 @@ class MediaPlayer(QWidget):
         elif not self.is_playing:
             self.playback_start_time = None
 
-    # --- PERBAIKAN 5: set_volume (VLC) ---
     def set_volume(self, value):
         self._volume = max(0, min(100, int(value)))
         if self.audio_player:
-            # VLC menggunakan 0-100, yang sudah cocok
             self.audio_player.audio_set_volume(self._volume)
-    # --- AKHIR PERBAIKAN ---
 
     def volume(self):
         return self._volume
@@ -507,7 +507,6 @@ class MediaPlayer(QWidget):
         if self.displayed_frame_source is not None:
             self.display_frame(self.displayed_frame_source)
             
-    # --- PERBAIKAN 6: toggle_play (VLC) ---
     def toggle_play(self):
         if not self.is_video or not self.video_capture: return
 
@@ -538,12 +537,10 @@ class MediaPlayer(QWidget):
             if self.audio_player:
                 # Sinkronkan dulu, baru play
                 self._sync_audio_to_current_frame(force=True)
-                self.audio_player.play()
+                # self.audio_player.play() <-- dipanggil di dalam sync
 
         self.playStateChanged.emit(self.is_playing)
-    # --- AKHIR PERBAIKAN ---
         
-    # --- PERBAIKAN 7: stop (VLC) ---
     def stop(self):
         if self.video_timer.isActive(): self.video_timer.stop()
         self.is_playing = False
@@ -564,7 +561,6 @@ class MediaPlayer(QWidget):
                 
         self.playStateChanged.emit(False)
         self.has_finished = False
-    # --- AKHIR PERBAIKAN ---
         
     def previous_frame(self):
         if not self.is_video or not self.video_capture: return
@@ -609,12 +605,11 @@ class MediaPlayer(QWidget):
                 self._sync_audio_to_current_frame(force=True)
                 self._reset_playback_clock()
                 
-    # --- PERBAIKAN 8: update_video_frame (VLC) ---
+    # --- update_video_frame SEKARANG SUDAH ADA ---
     def update_video_frame(self):
         if not self.is_video or not self.video_capture or not self.is_playing:
             return
             
-        # Periksa status audio, jika VLC selesai (State 6)
         if self.audio_player:
             # vlc.State.Ended == 6
             if self.audio_player.get_state() == vlc.State.Ended:
@@ -624,7 +619,7 @@ class MediaPlayer(QWidget):
                 self.has_finished = True
                 self.playback_start_time = None
                 self.playStateChanged.emit(False)
-                self.playbackFinished.emit(True) # Kirim sinyal selesai (karena audio)
+                self.playbackFinished.emit(True) 
                 return
 
         if self.loop_out_point is not None and self.current_frame_index >= self.loop_out_point:
@@ -655,7 +650,6 @@ class MediaPlayer(QWidget):
             if self.audio_player:
                 self.audio_player.pause()
             self.playStateChanged.emit(False)
-            self.playbackFinished.emit(False) # Selesai (bukan krn audio)
             return
             
         if target_index > self.current_frame_index + 1:
@@ -667,7 +661,10 @@ class MediaPlayer(QWidget):
             self.current_frame_index = int(self.video_capture.get(cv2.CAP_PROP_POS_FRAMES)) - 1
             self.display_frame(frame)
             self.frameIndexChanged.emit(self.current_frame_index, self.total_frames)
-            self._sync_audio_to_current_frame(force=False) # Sync normal
+            
+            # Hapus sync 'force=False' untuk stop "kretek-kretek"
+            # self._sync_audio_to_current_frame(force=False) 
+            
             self._reset_playback_clock()
         else:
             self.video_timer.stop()
@@ -677,10 +674,7 @@ class MediaPlayer(QWidget):
             if self.audio_player:
                 self.audio_player.pause()
             self.playStateChanged.emit(False)
-            self.playbackFinished.emit(False) # Selesai (bukan krn audio)
-    # --- AKHIR PERBAIKAN ---
             
-    # --- PERBAIKAN 9: closeEvent (VLC) ---
     def closeEvent(self, event):
         if self.video_capture: self.video_capture.release()
         if self.audio_player:
@@ -689,7 +683,6 @@ class MediaPlayer(QWidget):
         if self.vlc_instance:
             self.vlc_instance.release()
         super().closeEvent(event)
-    # --- AKHIR PERBAIKAN ---
 
     def has_media(self): return self.current_media_path is not None
     def get_current_file_path(self): return self.current_media_path
@@ -700,7 +693,7 @@ class MediaPlayer(QWidget):
             self.video_capture.release()
             self.video_capture = None
         
-        self._prepare_audio(None) # Ini akan memanggil audio_player.stop()
+        self._prepare_audio(None) 
             
         self.current_media_path = None
         self.current_frame = None
@@ -760,8 +753,6 @@ class MediaPlayer(QWidget):
                 target_view = 'B'
             self.fileDropped.emit(file_path, target_view)
             event.acceptProposedAction()
-
-    # ... (Fungsi drawing tidak berubah) ...
     
     def get_current_annotation_image(self):
         if self.current_frame_index < 0 or not self.frame_dims:
