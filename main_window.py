@@ -1566,13 +1566,10 @@ class MainWindow(QMainWindow):
         if self.is_compare_playing:
             self.is_compare_playing = False
             self.controls.set_play_state(False)
-            self.seek_to_position(0)
             
-            # Cek jika mode loop range aktif di compare mode
             if self.playback_mode == PlaybackMode.LOOP_MARKED_RANGE:
-                return # Fungsi update_compare_frames akan menanganinya
+                 return # Ditangani oleh update_compare_frames
             
-            # Cek jika mode loop normal aktif di compare mode
             if self.playback_mode == PlaybackMode.LOOP:
                 self.seek_to_position(0)
                 self.toggle_play() # Mulai ulang compare play
@@ -1581,12 +1578,12 @@ class MainWindow(QMainWindow):
             return
 
         if self.playback_mode == PlaybackMode.LOOP:
-            
             if not self.compare_mode: 
                 self.media_player.toggle_play()
         
         elif self.playback_mode == PlaybackMode.PLAY_NEXT:
-            # --- LOGIKA SEGMEN BARU ---
+            
+            # --- LOGIKA SEGMEN (Sudah Benar) ---
             if self.segment_map:
                 current_path = self.media_player.get_current_file_path()
                 current_index = -1
@@ -1602,12 +1599,11 @@ class MainWindow(QMainWindow):
                 else:
                     self.set_playback_mode(PlaybackMode.PLAY_ONCE)
             
-            # --- LOGIKA TREE ASLI ---
             else:
                 current_path = self.media_player.get_current_file_path()
                 item = self.find_item_by_path_recursive(current_path, self.timeline_item)
                 if item: 
-                    self.play_next_timeline_item() 
+                    self.play_next_timeline_item()
                 else:
                     self.set_playback_mode(PlaybackMode.PLAY_ONCE)
             
@@ -1812,60 +1808,59 @@ class MainWindow(QMainWindow):
         if self.is_mark_tour_active: self.toggle_mark_tour()
         if self.media_player.drawing_enabled:
             self.set_drawing_off()
+            
         if self.compare_mode:
             if self.is_compare_playing:
+                # --- BERHENTI COMPARE ---
                 self.compare_timer.stop()
                 self.is_compare_playing = False
+                
+                # PERBAIKAN: Beri tahu player A untuk berhenti & sync (pause) audio
+                self.media_player.is_playing = False # Set flag-nya
+                self.media_player._sync_audio_to_current_frame(force=True) # Paksa sync (akan pause)
+
             else:
+                # --- MULAI COMPARE ---
                 is_a_fin = self.media_player.total_frames > 0 and self.media_player.current_frame_index >= self.media_player.total_frames - 1
                 is_b_fin = self.media_player_2.total_frames > 0 and self.media_player_2.current_frame_index >= self.media_player_2.total_frames - 1
-                
-                # --- PERBAIKAN: Reset jika di loop range ---
                 is_in_loop_range = (self.playback_mode == PlaybackMode.LOOP_MARKED_RANGE and
                                     self.loop_out_point is not None and
                                     self.media_player.current_frame_index >= self.loop_out_point)
                 
+                # PERBAIKAN: Reset *kedua* player jika KEDUANYA selesai
                 if (is_a_fin and is_b_fin) and not is_in_loop_range:
-                # --- AKHIR PERBAIKAN ---
                     self.media_player.seek_to_position(0)
                     self.media_player_2.seek_to_position(0)
                     self.media_player.has_finished = False
-                    self.media_player_2.has_finished = False
+                    self.media_player_2.has_finished = False # <-- INI PENTING
                 elif is_in_loop_range:
-                     # Akan ditangani oleh update_compare_frames
                      pass
                      
                 fps_a = self.media_player.fps if self.media_player.fps > 0 else 30
                 fps_b = self.media_player_2.fps if self.media_player_2.fps > 0 else 30
                 self.compare_timer.start(int(1000 / min(fps_a, fps_b)))
                 self.is_compare_playing = True
+
+                # PERBAIKAN: Beri tahu player A untuk mulai & sync (play) audio
+                self.media_player.is_playing = True # Set flag-nya
+                self.media_player._sync_audio_to_current_frame(force=True) # Paksa sync (akan play)
+                
             self.controls.set_play_state(self.is_compare_playing)
         else:
-            # --- PERBAIKAN: Cek loop range di mode single ---
+            # Mode non-compare (logika ini sudah benar)
             is_in_loop_range = (self.playback_mode == PlaybackMode.LOOP_MARKED_RANGE and
                                 self.loop_out_point is not None and
                                 self.media_player.current_frame_index >= self.loop_out_point)
             
-            # --- PERBAIKAN: Logika restart "Play Once" ---
             if self.media_player.has_finished and not is_in_loop_range:
                 if self.segment_map:
-                    # Mode Segmen: panggil seek_to_position GLOBAL (MainWindow)
-                    # untuk pindah ke segmen pertama (frame global 0)
                     self.seek_to_position(0) 
                 else:
-                    # Mode Normal: panggil seek_to_position LOKAL (MediaPlayer)
                     self.media_player.seek_to_position(0)
-                
-                # Flag 'has_finished' akan di-reset oleh media_player.seek_to_position
-                # atau di dalam self.seek_to_position (via load_single_file -> media_player.load_media)
-                # Tapi kita set manual di sini untuk player internal
                 self.media_player.has_finished = False 
             
             elif is_in_loop_range:
-                 # media_player.toggle_play() akan memanggil update_video_frame
-                 # yang sudah memiliki logika loop range
                  pass
-            # --- AKHIR PERBAIKAN ---
             
             self.media_player.toggle_play()
             
@@ -1882,48 +1877,48 @@ class MainWindow(QMainWindow):
             self.media_player_2.seek_to_position(loop_start_frame)
             self.update_composite_view() # Tampilkan frame awal loop
             return # Selesai untuk frame "tick" ini
-        # --- PERBAIKAN: END ---
+        # --- AKHIR PERBAIKAN LOOP ---
 
-        # --- PERBAIKAN BUG: LOGIKA COMPARE MODE BARU ---
-        
-        # 1. Tentukan apakah A dan B sudah selesai
-        #    Kita perlu (total_frames > 0) untuk menangani media kosong atau gambar (total_frames=1)
         finished_a = not self.media_player.has_media() or \
                      (self.media_player.total_frames > 0 and self.media_player.current_frame_index >= self.media_player.total_frames - 1)
         
         finished_b = not self.media_player_2.has_media() or \
                      (self.media_player_2.total_frames > 0 and self.media_player_2.current_frame_index >= self.media_player_2.total_frames - 1)
 
-        # 2. Jika KEDUANYA selesai, hentikan timer
         if finished_a and finished_b:
             self.compare_timer.stop()
-            self.handle_playback_finished() # Ini akan cek mode LOOP, dll.
-            return # Jangan update lagi
+            # PERBAIKAN: Kirim argumen boolean
+            self.handle_playback_finished(False) 
+            return 
 
-        # 3. Jika salah satu belum selesai, panggil next_frame HANYA untuk yang belum selesai
+        # PERBAIKAN: Panggil next_frame mode "internal"
         if not finished_a:
-            self.media_player.next_frame()
+            self.media_player.next_frame(_update_media_internals_only=True)
         
         if not finished_b:
-            self.media_player_2.next_frame()
+            self.media_player_2.next_frame(_update_media_internals_only=True)
+        # --- AKHIR PERBAIKAN ---
 
-        # 4. Tampilkan hasilnya (salah satu/keduanya akan di-update)
+        # Sekarang update_composite_view akan mengambil frame baru
+        # dan menjadi satu-satunya yang memperbarui UI/Timeline
         self.update_composite_view()
-        # --- AKHIR PERBAIKAN BUG ---
-            
+
     def previous_frame(self):
         if self.is_compare_playing: return
         if self.media_player.drawing_enabled: self.set_drawing_off() 
-
-        # --- Ini harus ada ---
         if self.media_player.is_playing:
-            self.toggle_play() # Hentikan playback
-        # --- ---
+            self.toggle_play()
 
         if not self.segment_map:
-            self.media_player.previous_frame()
-            # ... (sisa fungsi Anda) ...
+            # --- PERBAIKAN: Gunakan flag saat mode compare ---
+            is_compare = self.compare_mode
+            self.media_player.previous_frame(_update_media_internals_only=is_compare)
+            if self.compare_mode:
+                self.media_player_2.previous_frame(_update_media_internals_only=True)
+                self.update_composite_view() # Perbarui UI/Timeline secara manual
+            # --- AKHIR PERBAIKAN ---
         else:
+            # Mode segmen
             current_global_frame = self.timeline.current_position
             if current_global_frame > 0:
                 self.seek_to_position(current_global_frame - 1)
@@ -1931,18 +1926,19 @@ class MainWindow(QMainWindow):
     def next_frame(self):
         if self.is_compare_playing: return
         if self.media_player.drawing_enabled: self.set_drawing_off() 
-        
-        # --- Ini harus ada ---
         if self.media_player.is_playing:
-            self.toggle_play() # Hentikan playback
-        # --- ---
-        
+            self.toggle_play()
+
         if not self.segment_map:
-            self.media_player.next_frame()
+            # --- PERBAIKAN: Gunakan flag saat mode compare ---
+            is_compare = self.compare_mode
+            self.media_player.next_frame(_update_media_internals_only=is_compare)
             if self.compare_mode:
-                self.media_player_2.next_frame()
-                self.update_composite_view()
+                self.media_player_2.next_frame(_update_media_internals_only=True)
+                self.update_composite_view() # Perbarui UI/Timeline secara manual
+            # --- AKHIR PERBAIKAN ---
         else:
+            # Mode segmen
             current_global_frame = self.timeline.current_position
             if current_global_frame < self.current_segment_total_frames - 1:
                 self.seek_to_position(current_global_frame + 1)
@@ -2006,7 +2002,6 @@ class MainWindow(QMainWindow):
     def update_frame_counter(self, current_frame, total_frames):
         # current_frame dan total_frames di sini adalah LOKAL (dari media_player)
         
-        # --- LOGIKA REMAPPING SEGMEN BARU ---
         if not self.segment_map:
             # Mode Normal
             if self.compare_mode:
@@ -2022,12 +2017,11 @@ class MainWindow(QMainWindow):
         else:
             # Mode Segmen
             current_path = self.media_player.get_current_file_path()
-            if not current_path: # Bisa terjadi sesaat saat memuat
+            if not current_path: 
                 return 
                 
             segment_start_frame = 0
             
-            # Cari frame awal segmen saat ini
             for segment in self.segment_map:
                 if segment['path'] == current_path:
                     segment_start_frame = segment['start_frame']
@@ -2041,11 +2035,10 @@ class MainWindow(QMainWindow):
             self.timeline.set_duration(self.current_segment_total_frames)
             self.timeline.set_position(global_frame)
             
-            # Update FPS timeline jika berubah antar segmen
             if self.timeline.fps != self.media_player.fps:
                  self.timeline.set_fps(self.media_player.fps)
                  
-            # --- PERBAIKAN LOOP: START ---
+            # --- PERBAIKAN: Pindahkan Logika Loop ke Sini ---
             # Cek logika loop range di sini menggunakan frame GLOBAL
             if (self.media_player.is_playing and # Hanya jika sedang play
                 self.playback_mode == PlaybackMode.LOOP_MARKED_RANGE and
@@ -2056,9 +2049,7 @@ class MainWindow(QMainWindow):
                 
                 # Gunakan self.seek_to_position() yang mengerti frame GLOBAL
                 self.seek_to_position(loop_start_frame)
-            # --- PERBAIKAN LOOP: END ---
-                 
-        # --- AKHIR LOGIKA REMAPPING ---
+            # --- AKHIR PERBAIKAN ---
         
     def update_frame_counter_B(self, cf, tf): pass
     
