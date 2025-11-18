@@ -333,6 +333,28 @@ class MediaPlayer(QWidget):
                 
         except Exception as e:
             print(f"Error saat sinkronisasi VLC (force=True): {e}")
+            
+    def scrub_audio_at_current_frame(self):
+        """
+        Memainkan cuplikan audio singkat di frame saat ini lalu berhenti.
+        """
+        if not self.audio_player or self.is_playing:
+            # Jangan scrub jika audio sudah diputar (is_playing)
+            # atau jika tidak ada audio player
+            return 
+
+        target_ms = self._current_time_ms()
+        
+        try:
+            self.audio_player.set_time(target_ms)
+            self.audio_player.play()
+            
+            # Atur timer untuk PAUSE setelah 60ms.
+            # Ini akan memainkan audio ~1-2 frame lalu berhenti.
+            QTimer.singleShot(60, self.audio_player.pause)
+            
+        except Exception as e:
+            print(f"Error saat audio scrub: {e}")
 
     def _reset_playback_clock(self):
         if self.is_playing and self.fps > 0:
@@ -583,11 +605,15 @@ class MediaPlayer(QWidget):
                 self.current_frame_index = int(self.video_capture.get(cv2.CAP_PROP_POS_FRAMES)) - 1
                 self.has_finished = False
                 
-                # PERBAIKAN: Hanya update UI/Audio jika tidak dalam mode internal
                 if not _update_media_internals_only:
                     self.display_frame(frame)
                     self.frameIndexChanged.emit(self.current_frame_index, self.total_frames)
-                    self._sync_audio_to_current_frame(force=True)
+                    
+                    # --- PERBAIKAN DI SINI ---
+                    self.scrub_audio_at_current_frame() # Panggil fungsi scrub
+                    # self._sync_audio_to_current_frame(force=True) # <-- GANTI INI
+                    # --- AKHIR PERBAIKAN ---
+                    
                     self._reset_playback_clock()
 
     def next_frame(self, _update_media_internals_only=False):
@@ -600,14 +626,18 @@ class MediaPlayer(QWidget):
                 self.current_frame_index = int(self.video_capture.get(cv2.CAP_PROP_POS_FRAMES)) - 1
                 self.has_finished = False
                 
-                # PERBAIKAN: Hanya update UI/Audio jika tidak dalam mode internal
                 if not _update_media_internals_only:
                     self.display_frame(frame)
                     self.frameIndexChanged.emit(self.current_frame_index, self.total_frames)
-                    self._sync_audio_to_current_frame(force=True)
+                    
+                    # --- PERBAIKAN DI SINI ---
+                    self.scrub_audio_at_current_frame() # Panggil fungsi scrub
+                    # self._sync_audio_to_current_frame(force=True) # <-- GANTI INI
+                    # --- AKHIR PERBAIKAN ---
+                    
                     self._reset_playback_clock()
         
-    def seek_to_position(self, position):
+    def seek_to_position(self, position, _sync_audio=True):
         if not self.is_video or not self.video_capture: return
         frame_index = int(position)
         if 0 <= frame_index < self.total_frames:
@@ -618,10 +648,10 @@ class MediaPlayer(QWidget):
                 self.current_frame_index = int(self.video_capture.get(cv2.CAP_PROP_POS_FRAMES)) - 1
                 self.display_frame(frame)
                 self.frameIndexChanged.emit(self.current_frame_index, self.total_frames)
-                self._sync_audio_to_current_frame(force=True)
+                if _sync_audio:
+                    self._sync_audio_to_current_frame(force=True)                
                 self._reset_playback_clock()
                 
-    # --- update_video_frame SEKARANG SUDAH ADA ---
     def update_video_frame(self):
         if not self.is_video or not self.video_capture or not self.is_playing:
             return
@@ -630,7 +660,6 @@ class MediaPlayer(QWidget):
             # vlc.State.Ended == 6
             if self.audio_player.get_state() == vlc.State.Ended:
                 # --- PERBAIKAN: Gunakan 'has_finished' sebagai 'lock' ---
-                # Hanya kirim sinyal jika belum selesai
                 if not self.has_finished:
                     print("VLC: end of stream")
                     self.video_timer.stop()
@@ -671,6 +700,7 @@ class MediaPlayer(QWidget):
                 if self.audio_player:
                     self.audio_player.pause()
                 self.playStateChanged.emit(False)
+                # TAMBAHKAN SINYAL INI KEMBALI
                 self.playbackFinished.emit(False) # Kirim sinyal (karena video selesai)
             # --- AKHIR PERBAIKAN ---
             return
@@ -684,10 +714,7 @@ class MediaPlayer(QWidget):
             self.current_frame_index = int(self.video_capture.get(cv2.CAP_PROP_POS_FRAMES)) - 1
             self.display_frame(frame)
             self.frameIndexChanged.emit(self.current_frame_index, self.total_frames)
-            
-            # Hapus sync 'force=False' untuk stop "kretek-kretek"
-            # self._sync_audio_to_current_frame(force=False) 
-            
+            # (Sync force=False sengaja dihapus untuk cegah 'kretek-kretek')
             self._reset_playback_clock()
         else:
             # --- PERBAIKAN: Gunakan 'has_finished' sebagai 'lock' ---
@@ -699,7 +726,8 @@ class MediaPlayer(QWidget):
                 if self.audio_player:
                     self.audio_player.pause()
                 self.playStateChanged.emit(False)
-                self.playbackFinished.emit(False) # Kirim sinyal (karena video selesai)
+                # TAMBAHKAN SINYAL INI KEMBALI
+                self.playbackFinished.emit(False) # Kirim sinyal (karena OpenCV gagal read)
             # --- AKHIR PERBAIKAN ---
             
     def closeEvent(self, event):
