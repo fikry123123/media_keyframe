@@ -99,6 +99,14 @@ class ProjectTreeWidget(QTreeWidget):
             super().dragEnterEvent(event)
 
     def dragMoveEvent(self, event):
+        # 1. Prioritas Utama: File Eksternal (Dari Nautilus/File Manager)
+        if event.mimeData().hasUrls():
+            # PENTING: Ubah ikon cursor menjadi 'Copy' agar tidak terlihat forbidden
+            event.setDropAction(Qt.CopyAction)
+            event.accept()
+            return
+
+        # 2. Logika Drag-Drop Internal (Memindahkan item playlist)
         target_item = self.itemAt(event.pos())
         is_valid_target = False
 
@@ -110,16 +118,18 @@ class ProjectTreeWidget(QTreeWidget):
                 parent = parent.parent()
             return False
         
+        # Jika mouse di area kosong (bukan di atas item)
         if not target_item:
              event.ignore()
              return
 
-        if event.mimeData().hasUrls():
-            is_valid_target = True # Izinkan drop file ke mana saja
+        # Cek tipe data internal
+        if event.mimeData().hasFormat("application/x-playlist-paths"):
+             is_valid_target = True
         elif is_in_timeline(target_item):
              is_valid_target = True
 
-        # Mencegah drop folder ke dalam dirinya sendiri (untuk InternalMove)
+        # Mencegah folder didrop ke dalam dirinya sendiri
         if event.source() == self and self.selectedItems():
             dragged_item = self.selectedItems()[0]
             if target_item:
@@ -131,6 +141,8 @@ class ProjectTreeWidget(QTreeWidget):
                     parent = parent.parent()
         
         if is_valid_target:
+            # Internal move biasanya menggunakan MoveAction
+            event.setDropAction(Qt.MoveAction)
             event.accept()
         else:
             event.ignore()

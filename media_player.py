@@ -777,6 +777,17 @@ class MediaPlayer(QWidget):
     def dragEnterEvent(self, event: QDragEnterEvent):
         if event.mimeData().hasUrls() or event.mimeData().hasFormat("application/x-playlist-paths"):
             event.acceptProposedAction()
+
+    def dragMoveEvent(self, event):
+        """
+        WAJIB untuk Linux: Memberi tahu OS bahwa widget ini siap menerima drop
+        saat mouse bergerak di atasnya.
+        """
+        if event.mimeData().hasUrls() or event.mimeData().hasFormat("application/x-playlist-paths"):
+            event.setDropAction(Qt.CopyAction) # Ubah kursor jadi 'Copy'
+            event.accept()
+        else:
+            super().dragMoveEvent(event)        
     
     def dropEvent(self, event: QDropEvent):
         file_path = None
