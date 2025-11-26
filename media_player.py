@@ -31,6 +31,8 @@ class DrawingLabel(QLabel):
         self.setMouseTracking(True) 
         self.panning = False
         self.last_pan_pos = QPoint(0, 0)
+        # Enable drag-drop pada label
+        self.setAcceptDrops(True)
 
     def _map_widget_to_frame_coords(self, widget_pos):
         """
@@ -188,6 +190,31 @@ class DrawingLabel(QLabel):
             self.media_player.display_frame(self.media_player.displayed_frame_source)
         event.accept()
 
+    # --- DRAG-DROP HANDLERS UNTUK DRAWING LABEL ---
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        """Terima drag enter event untuk file dan playlist paths."""
+        if event.mimeData().hasUrls() or event.mimeData().hasFormat("application/x-playlist-paths"):
+            event.setDropAction(Qt.CopyAction)
+            event.accept()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        """Terima drag move event dan set cursor."""
+        if event.mimeData().hasUrls() or event.mimeData().hasFormat("application/x-playlist-paths"):
+            event.setDropAction(Qt.CopyAction)
+            event.accept()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event: QDropEvent):
+        """Forward drop event ke parent media_player."""
+        # Cegah recursive event handling - gunakan parent media_player untuk process
+        if hasattr(self, 'media_player') and self.media_player:
+            self.media_player.dropEvent(event)
+        else:
+            event.ignore()
+
 # --- Akhir dari class DrawingLabel ---
 
 
@@ -275,6 +302,8 @@ class MediaPlayer(QWidget):
         """)
         self.video_label.setText("Load media file to start...")
         layout.addWidget(self.video_label)
+        # Ensure MediaPlayer widget also accepts drops
+        self.setAcceptDrops(True)
 
     def _prepare_audio(self, file_path):
         if not self.audio_player:
