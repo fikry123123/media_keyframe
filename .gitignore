@@ -12,6 +12,8 @@ build/
 *.spec
 runtime-x86_64
 AppDir/
+AppDir-Complete/
+squashfs-root/
 
 # Python cache
 __pycache__/
