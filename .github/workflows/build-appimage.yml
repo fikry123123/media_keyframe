@@ -1,0 +1,116 @@
+name: Build AppImage Release
+
+on:
+  push:
+    tags:
+      - 'v*'  # Trigger on version tags like v1.0.0
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pyinstaller
+    
+    - name: Download AppImage tools
+      run: |
+        cd /tmp
+        wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+        chmod +x appimagetool-x86_64.AppImage
+        cp appimagetool-x86_64.AppImage ${{ github.workspace }}/
+    
+    - name: Build executable with PyInstaller
+      run: |
+        pyinstaller main.py \
+          --collect-all=PyQt5 \
+          --collect-all=cv2 \
+          --collect-all=numpy \
+          --collect-all=vlc \
+          --onefile \
+          -n kenae_player \
+          --windowed
+    
+    - name: Create AppDir structure
+      run: |
+        mkdir -p AppDir/usr/bin
+        mkdir -p AppDir/usr/share/applications
+        mkdir -p AppDir/usr/share/pixmaps
+        
+        # Copy main executable
+        cp dist/kenae_player AppDir/usr/bin/kenae_player
+        
+        # Create launcher wrapper
+        cat > AppDir/usr/bin/kenae_player_wrapper.sh << 'EOF'
+        #!/bin/bash
+        APPDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+        export PATH="$APPDIR/usr/bin:$PATH"
+        exec "$APPDIR/usr/bin/kenae_player" "$@"
+        EOF
+        chmod +x AppDir/usr/bin/kenae_player_wrapper.sh
+        
+        # Create AppRun
+        cat > AppDir/AppRun << 'EOF'
+        #!/bin/bash
+        APPDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        export LD_LIBRARY_PATH="$APPDIR/usr/lib:$LD_LIBRARY_PATH"
+        export PATH="$APPDIR/usr/bin:$PATH"
+        exec "$APPDIR/usr/bin/kenae_player" "$@"
+        EOF
+        chmod +x AppDir/AppRun
+        
+        # Create desktop entry
+        cat > AppDir/usr/share/applications/kenae-player.desktop << 'EOF'
+        [Desktop Entry]
+        Version=1.0
+        Type=Application
+        Name=Kenae Media Player
+        Comment=Video and Image Frame Player
+        Exec=kenae_player
+        Terminal=false
+        Categories=AudioVideo;Player;
+        EOF
+    
+    - name: Build AppImage
+      run: |
+        ARCH=x86_64 ./appimagetool-x86_64.AppImage AppDir kenae_media_player-x86_64.AppImage
+    
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: kenae_media_player-x86_64.AppImage
+        body: |
+          ## Kenae Media Player - AppImage Release
+          
+          ### Download & Run
+          ```bash
+          chmod +x kenae_media_player-x86_64.AppImage
+          ./kenae_media_player-x86_64.AppImage
+          ```
+          
+          ### Features
+          - Video and Image Sequence Playback
+          - Frame-by-frame Navigation
+          - Timeline Editing
+          - VLC Audio Support
+          
+          ### Requirements
+          - Linux x86_64
+          - GLIBC 2.29 or higher
+          
+          ### Installation Options
+          1. **Direct Run**: `./kenae_media_player-x86_64.AppImage`
+          2. **Copy to Applications**: `cp kenae_media_player-x86_64.AppImage ~/.local/bin/`
+          3. **Desktop Shortcut**: See README for desktop integration
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
