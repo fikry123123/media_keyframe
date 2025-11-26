@@ -62,32 +62,19 @@ main() {
     # Copy PyInstaller binary (if it exists - has all deps bundled!)
     if [ -f "dist/kenae_player" ]; then
         print_step "Using PyInstaller binary with bundled dependencies..."
-        cp dist/kenae_player AppDir-Complete/usr/bin/kenae_player.bin
-        chmod +x AppDir-Complete/usr/bin/kenae_player.bin
-    fi
-    
-    # Create portable launcher script
-    print_step "Creating portable launcher..."
-    cat > AppDir-Complete/usr/bin/kenae_player << 'LAUNCHER'
+        cp dist/kenae_player AppDir-Complete/usr/bin/kenae_player
+        chmod +x AppDir-Complete/usr/bin/kenae_player
+    else
+        # Create portable launcher script if binary not available
+        print_step "Creating portable Python launcher..."
+        cat > AppDir-Complete/usr/bin/kenae_player << 'LAUNCHER'
 #!/bin/bash
 # Portable launcher for kenae media player
 
 APPDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 export APPDIR
 
-# Critical: Set library paths BEFORE running to avoid plugin conflicts
-# PyInstaller bundles libraries in a specific structure
-export LD_LIBRARY_PATH="$APPDIR/usr/bin/../lib:$APPDIR/usr/bin/../lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
-
-# Fix Qt platform plugin - use system plugins first (avoid CV2 Qt conflicts)
-unset QT_QPA_PLATFORM_PLUGIN_PATH
-
-# Strategy 1: Use PyInstaller binary if available (has all deps bundled)
-if [ -f "$APPDIR/usr/bin/kenae_player.bin" ]; then
-    exec "$APPDIR/usr/bin/kenae_player.bin" "$@"
-fi
-
-# Strategy 2: Use system Python with embedded source
+# Strategy: Use system Python with embedded source
 PYTHON=""
 if command -v python3 &> /dev/null; then
     PYTHON="python3"
@@ -112,7 +99,8 @@ fi
 # Run main.py from AppImage directory
 exec "$PYTHON" "$APPDIR/opt/kenae-player/main.py" "$@"
 LAUNCHER
-    chmod +x AppDir-Complete/usr/bin/kenae_player
+        chmod +x AppDir-Complete/usr/bin/kenae_player
+    fi
     
     print_success "AppImage structure created"
     
@@ -248,11 +236,16 @@ EOF
 #!/bin/bash
 APPDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export APPDIR
+
+# Fix library loading for PyInstaller bundle
 export LD_LIBRARY_PATH="$APPDIR/usr/lib:$APPDIR/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
 export PATH="$APPDIR/usr/bin:$PATH"
 
-# Unset conflicting Qt plugin paths (use system or bundled defaults)
-unset QT_QPA_PLATFORM_PLUGIN_PATH
+# Disable CV2 Qt to avoid conflicts with PyQt5
+export QT_QPA_PLATFORM_PLUGIN_PATH=""
+
+# Use default Qt plugin loader (will find xcb automatically)
+unset QT_PLUGIN_PATH
 
 # Check if help/scripts/docs requested
 if [ "$1" = "--help" ] || [ "$1" = "-h" ] || [ "$1" = "--scripts" ] || [ "$1" = "--docs" ]; then
@@ -265,7 +258,7 @@ if [ "$1" = "--install" ] || [ "$1" = "--quick-install" ] || [ "$1" = "--build" 
 fi
 
 # Launch media player
-exec "$APPDIR/usr/bin/kenae-launcher" "$@"
+exec "$APPDIR/usr/bin/kenae_player" "$@"
 EOF
     
     chmod +x AppDir-Complete/AppRun
@@ -452,14 +445,14 @@ EOF
     print_step "Building self-contained AppImage..."
     echo "This may take a minute..."
     
-    rm -f kenae_media_player_complete-x86_64.AppImage
-    ARCH=x86_64 ./appimagetool.AppImage AppDir-Complete kenae_media_player_complete-x86_64.AppImage
+    rm -f kenae_player-x86_64.AppImage
+    ARCH=x86_64 ./appimagetool.AppImage AppDir-Complete kenae_player-x86_64.AppImage
     
-    if [ -f "kenae_media_player_complete-x86_64.AppImage" ]; then
-        chmod +x kenae_media_player_complete-x86_64.AppImage
+    if [ -f "kenae_player-x86_64.AppImage" ]; then
+        chmod +x kenae_player-x86_64.AppImage
         print_success "Self-contained AppImage built successfully!"
         echo ""
-        ls -lh kenae_media_player_complete-x86_64.AppImage
+        ls -lh kenae_player-x86_64.AppImage
         echo ""
     else
         print_error "Failed to build AppImage"
