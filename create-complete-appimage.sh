@@ -57,25 +57,46 @@ main() {
     mkdir -p AppDir-Complete/usr/share/doc/kenae-player
     mkdir -p AppDir-Complete/opt/kenae-player/scripts
     mkdir -p AppDir-Complete/opt/kenae-player/docs
+    mkdir -p AppDir-Complete/opt/kenae-player/src
     
-    # Get executable (either from dist or existing AppImage)
-    if [ -f "dist/kenae_player" ]; then
-        cp dist/kenae_player AppDir-Complete/usr/bin/
-    elif [ -f "kenae_media_player-x86_64.AppImage" ]; then
-        # Extract executable from existing AppImage
-        print_step "Extracting from existing AppImage..."
-        ./kenae_media_player-x86_64.AppImage --appimage-extract > /dev/null 2>&1
-        if [ -f "squashfs-root/usr/bin/kenae_player" ]; then
-            cp squashfs-root/usr/bin/kenae_player AppDir-Complete/usr/bin/
-        else
-            print_error "Could not find executable in AppImage"
-            exit 1
-        fi
+    # Create portable launcher script instead of using PyInstaller binary
+    print_step "Creating portable Python launcher..."
+    cat > AppDir-Complete/usr/bin/kenae_player << 'LAUNCHER'
+#!/bin/bash
+# Portable launcher for kenae media player
+
+APPDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+export APPDIR
+
+# Try to find Python (system or venv)
+PYTHON=""
+if command -v python3 &> /dev/null; then
+    PYTHON="python3"
+elif command -v python &> /dev/null; then
+    PYTHON="python"
+else
+    # Check if running from extracted AppImage directory
+    if [ -f "$APPDIR/venv_app/bin/python" ]; then
+        PYTHON="$APPDIR/venv_app/bin/python"
     else
-        print_error "No executable found. Build it first:"
-        echo "  ./build-appimage.sh"
+        echo "Error: Python not found. Please install Python 3 and PyQt5:"
+        echo "  Ubuntu/Debian: sudo apt-get install python3 python3-pyqt5 python3-opencv python3-vlc"
+        echo "  Fedora: sudo dnf install python3 python3-PyQt5 python3-opencv vlc-python"
         exit 1
     fi
+fi
+
+# Check for required packages
+"$PYTHON" -c "import PyQt5" 2>/dev/null || {
+    echo "Error: PyQt5 not found. Please install it:"
+    echo "  pip install PyQt5 opencv-python python-vlc"
+    exit 1
+}
+
+# Run main.py from AppImage directory
+exec "$PYTHON" "$APPDIR/opt/kenae-player/main.py" "$@"
+LAUNCHER
+    chmod +x AppDir-Complete/usr/bin/kenae_player
     
     print_success "AppImage structure created"
     
@@ -91,6 +112,21 @@ main() {
     chmod +x AppDir-Complete/opt/kenae-player/scripts/*.sh
     
     print_success "Scripts added (setup-menu.sh, setup.sh, quick-install.sh, etc.)"
+    
+    # Copy application source code
+    print_step "Adding application source code..."
+    cp main.py AppDir-Complete/opt/kenae-player/
+    cp main_window.py AppDir-Complete/opt/kenae-player/
+    cp media_player.py AppDir-Complete/opt/kenae-player/
+    cp media_controls.py AppDir-Complete/opt/kenae-player/
+    cp timeline_widget.py AppDir-Complete/opt/kenae-player/
+    cp drawing_toolbar.py AppDir-Complete/opt/kenae-player/
+    cp sequence_capture.py AppDir-Complete/opt/kenae-player/
+    
+    # Copy src directory
+    cp -r src/* AppDir-Complete/opt/kenae-player/src/ 2>/dev/null || true
+    
+    print_success "Application source code added"
     
     # Copy all documentation
     print_step "Adding documentation..."
