@@ -2,9 +2,29 @@
 
 Aplikasi media player untuk pemutaran video, frame sequences, dan image dengan fitur timeline editing yang powerful.
 
-## 🚀 Quick Start - Download AppImage
+## 🚀 Quick Start
 
-### Cara Tercepat (Download Pre-built)
+### ⚡ Fastest Way (Use Setup Scripts)
+
+**Choose your method:**
+
+```bash
+# Option 1: Interactive Menu (Recommended)
+./setup-menu.sh
+
+# Option 2: Complete Setup (Clone + Build + Install)
+./setup.sh
+
+# Option 3: Quick Install (Download + Install)
+./quick-install.sh
+
+# Option 4: Build Only (For Developers)
+./build-appimage.sh
+```
+
+**See [QUICK-START.md](QUICK-START.md) for detailed guide!**
+
+### 📥 Manual Installation
 
 1. **Download AppImage** dari [GitHub Releases](https://github.com/fikry123123/media_keyframe/releases)
 
@@ -14,34 +34,15 @@ Aplikasi media player untuk pemutaran video, frame sequences, dan image dengan f
    ./kenae_media_player-x86_64.AppImage
    ```
 
-3. **Atau copy ke bin folder:**
+3. **Atau gunakan quick-install script:**
    ```bash
-   chmod +x kenae_media_player-x86_64.AppImage
-   sudo cp kenae_media_player-x86_64.AppImage /usr/local/bin/kenaeplayer
-   
-   # Jalankan dari mana saja
-   kenaeplayer
+   chmod +x quick-install.sh
+   ./quick-install.sh
    ```
 
-## 📦 Installasi Desktop Shortcut
+## 📦 Installasi Desktop & App Launcher
 
-Buat file shortcut di desktop:
-```bash
-cat > ~/.local/share/applications/kenaeplayer.desktop << 'DESKTOP'
-[Desktop Entry]
-Version=1.0
-Type=Application
-Name=Kenae Media Player
-Comment=Video and Image Frame Player
-Exec=/path/to/kenae_media_player-x86_64.AppImage
-Terminal=false
-Categories=AudioVideo;Player;
-Icon=media-player
-DESKTOP
-
-# Update desktop database
-update-desktop-database ~/.local/share/applications/
-```
+Desktop integration dilakukan otomatis oleh setup scripts! Lihat [SCRIPTS.md](SCRIPTS.md) untuk detail.
 
 ## 💻 Development - Build from Source
 
@@ -115,23 +116,12 @@ update-desktop-database ~/.local/share/applications/
 - OpenCV 4.5+
 - VLC 3.0+
 
-## 📋 Project Structure
+## 📚 Documentation
 
-```
-.
-├── main.py                 # Entry point aplikasi
-├── main_window.py          # Main UI window
-├── media_player.py         # Media playback widget
-├── media_controls.py       # Playback controls
-├── drawing_toolbar.py      # Drawing tools
-├── timeline_widget.py      # Timeline widget
-├── requirements.txt        # Python dependencies
-├── src/
-│   ├── media/             # Media handling modules
-│   ├── ui/                # UI components
-│   └── utils/             # Utility functions
-└── demo_files/            # Demo media files
-```
+- **[QUICK-START.md](QUICK-START.md)** - One-page quick reference
+- **[SCRIPTS.md](SCRIPTS.md)** - All setup scripts documentation  
+- **[INSTALL.md](INSTALL.md)** - Detailed installation guide
+- **[RELEASE.md](RELEASE.md)** - Release notes and versions
 
 ## 🐛 Troubleshooting
 
