@@ -185,17 +185,16 @@ EOF
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         print_step "Launching AppImage..."
-        if ./kenae_media_player-x86_64.AppImage > /tmp/appimage_test.log 2>&1 &
-            PID=$!
-            sleep 3
-            if ps -p $PID > /dev/null; then
-                print_success "Application started successfully!"
-                print_info "Close the application to continue..."
-                wait $PID 2>/dev/null || true
-            else
-                print_error "Application failed to start"
-                print_info "Check log: cat /tmp/appimage_test.log"
-            fi
+        ./kenae_media_player-x86_64.AppImage > /tmp/appimage_test.log 2>&1 &
+        PID=$!
+        sleep 3
+        if ps -p $PID > /dev/null; then
+            print_success "Application started successfully!"
+            print_info "Close the application to continue..."
+            wait $PID 2>/dev/null || true
+        else
+            print_error "Application failed to start"
+            print_info "Check log: cat /tmp/appimage_test.log"
         fi
     fi
     

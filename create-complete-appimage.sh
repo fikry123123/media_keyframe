@@ -59,8 +59,15 @@ main() {
     mkdir -p AppDir-Complete/opt/kenae-player/docs
     mkdir -p AppDir-Complete/opt/kenae-player/src
     
-    # Create portable launcher script instead of using PyInstaller binary
-    print_step "Creating portable Python launcher..."
+    # Copy PyInstaller binary (if it exists - has all deps bundled!)
+    if [ -f "dist/kenae_player" ]; then
+        print_step "Using PyInstaller binary with bundled dependencies..."
+        cp dist/kenae_player AppDir-Complete/usr/bin/kenae_player.bin
+        chmod +x AppDir-Complete/usr/bin/kenae_player.bin
+    fi
+    
+    # Create portable launcher script
+    print_step "Creating portable launcher..."
     cat > AppDir-Complete/usr/bin/kenae_player << 'LAUNCHER'
 #!/bin/bash
 # Portable launcher for kenae media player
@@ -68,27 +75,29 @@ main() {
 APPDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 export APPDIR
 
-# Try to find Python (system or venv)
+# Strategy 1: Use PyInstaller binary if available (has all deps bundled)
+if [ -f "$APPDIR/usr/bin/kenae_player.bin" ]; then
+    exec "$APPDIR/usr/bin/kenae_player.bin" "$@"
+fi
+
+# Strategy 2: Use system Python with embedded source
 PYTHON=""
 if command -v python3 &> /dev/null; then
     PYTHON="python3"
 elif command -v python &> /dev/null; then
     PYTHON="python"
+elif [ -f "$APPDIR/venv_app/bin/python" ]; then
+    PYTHON="$APPDIR/venv_app/bin/python"
 else
-    # Check if running from extracted AppImage directory
-    if [ -f "$APPDIR/venv_app/bin/python" ]; then
-        PYTHON="$APPDIR/venv_app/bin/python"
-    else
-        echo "Error: Python not found. Please install Python 3 and PyQt5:"
-        echo "  Ubuntu/Debian: sudo apt-get install python3 python3-pyqt5 python3-opencv python3-vlc"
-        echo "  Fedora: sudo dnf install python3 python3-PyQt5 python3-opencv vlc-python"
-        exit 1
-    fi
+    echo "Error: Python not found. Please install Python 3:"
+    echo "  Ubuntu/Debian: sudo apt-get install python3 python3-pyqt5 python3-opencv python3-vlc"
+    echo "  Fedora: sudo dnf install python3 python3-PyQt5 python3-opencv vlc-python"
+    exit 1
 fi
 
 # Check for required packages
-"$PYTHON" -c "import PyQt5" 2>/dev/null || {
-    echo "Error: PyQt5 not found. Please install it:"
+"$PYTHON" -c "import PyQt5, cv2, vlc" 2>/dev/null || {
+    echo "Error: Required packages not found. Please install:"
     echo "  pip install PyQt5 opencv-python python-vlc"
     exit 1
 }
