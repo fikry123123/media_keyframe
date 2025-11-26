@@ -75,6 +75,13 @@ main() {
 APPDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 export APPDIR
 
+# Critical: Set library paths BEFORE running to avoid plugin conflicts
+# PyInstaller bundles libraries in a specific structure
+export LD_LIBRARY_PATH="$APPDIR/usr/bin/../lib:$APPDIR/usr/bin/../lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
+
+# Fix Qt platform plugin - use system plugins first (avoid CV2 Qt conflicts)
+unset QT_QPA_PLATFORM_PLUGIN_PATH
+
 # Strategy 1: Use PyInstaller binary if available (has all deps bundled)
 if [ -f "$APPDIR/usr/bin/kenae_player.bin" ]; then
     exec "$APPDIR/usr/bin/kenae_player.bin" "$@"
@@ -241,8 +248,11 @@ EOF
 #!/bin/bash
 APPDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export APPDIR
-export LD_LIBRARY_PATH="$APPDIR/usr/lib:$LD_LIBRARY_PATH"
+export LD_LIBRARY_PATH="$APPDIR/usr/lib:$APPDIR/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
 export PATH="$APPDIR/usr/bin:$PATH"
+
+# Unset conflicting Qt plugin paths (use system or bundled defaults)
+unset QT_QPA_PLATFORM_PLUGIN_PATH
 
 # Check if help/scripts/docs requested
 if [ "$1" = "--help" ] || [ "$1" = "-h" ] || [ "$1" = "--scripts" ] || [ "$1" = "--docs" ]; then
