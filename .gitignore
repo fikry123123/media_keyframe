@@ -1,16 +1,41 @@
+# Virtual Environments
 venv/
 .venv/
+venv_app/
+env/
+ENV/
 
 # Build artifacts
 dist/
 build/
 *.AppImage
-.venv/
-lib/Python*/
-lib64/
-__pycache__/*
+*.spec
+runtime-x86_64
+AppDir/
 
 # Python cache
-__pycache__/*
+__pycache__/
 *.pyc
 *.pyo
+*.pyd
+*.so
+.Python
+*.egg-info/
+*.egg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Demo files (keep only structure)
+demo_files/frame_sequence/*.jpg
+demo_files/sample.*
+
+# Testing
+test_*.py
+*.log
+/tmp/
